@@ -101,15 +101,14 @@ scripts/           core-logic test
 
 ## Bambu Studio note
 
-Opening any 3MF not saved by Bambu Studio may show a notification like *"The
-3mf file has invalid config, load geometry data only"* (or *"not from Bambu
-Lab…"* on newer versions). This is cosmetic — the geometry loads normally.
-
 The exported 3MF embeds Bambu-style metadata
 (`Metadata/model_settings.config` + `Metadata/project_settings.config`)
 alongside the standard 3MF `m:colorgroup`: parts come pre-assigned to
-extruders 1–4, and when the file is opened as a project the filament section
-is pre-populated with the four colors (PLA).
+extruders 1–4, and the filament section is pre-populated with the four
+colors (PLA). The project config carries the `nozzle_diameter` /
+`extruder_type` arrays that Bambu Studio's config validity check requires
+(tested against v2.8.2.61's import code), so no "invalid config" dialog
+appears and filament colors load directly.
 
 ## Tips for printing
 

@@ -202,17 +202,25 @@ ${objects}
 }
 
 /**
- * Minimal Bambu-Studio-style Metadata/project_settings.config: just the
- * filament colors/types, so the filament section is pre-populated when the
- * file is opened as a project. Unknown/absent keys safely fall back to
- * defaults on load.
+ * Minimal Bambu-Studio-style Metadata/project_settings.config.
+ *
+ * Bambu Studio's project-config validity check (check_project_config in
+ * Plater.cpp) requires a nozzle_diameter entry per extruder and, for
+ * multi-extruder configs, an extruder_type array of the same size —
+ * otherwise it shows "The 3mf file has invalid config" and refuses to load
+ * the config (including the filament colors). filament_colour is also
+ * mandatory when the config is applied (load_config_file_config throws
+ * without it). Unknown/absent keys safely fall back to defaults.
  */
 export function buildProjectSettingsJson(parts: ExportPart[]): string {
+  const n = parts.length;
   return JSON.stringify(
     {
       name: "project_settings",
       from: "project",
       version: "2.0.0.0",
+      nozzle_diameter: Array(n).fill("0.4"),
+      extruder_type: Array(n).fill("Bowden"),
       filament_colour: parts.map((p) => rgbToHex(p.color).toUpperCase()),
       filament_type: parts.map(() => "PLA"),
     },

@@ -390,6 +390,18 @@ async function main() {
       ps.filament_type.every((t: string) => t === "PLA"),
     "filament types default to PLA"
   );
+  check(
+    Array.isArray(ps.nozzle_diameter) &&
+      ps.nozzle_diameter.length === 4 &&
+      ps.nozzle_diameter.every((d: string) => d === "0.4"),
+    "nozzle_diameter: 4 entries (Bambu config validity check)"
+  );
+  check(
+    Array.isArray(ps.extruder_type) &&
+      ps.extruder_type.length === 4 &&
+      ps.extruder_type.every((t: string) => t === "Bowden"),
+    "extruder_type: 4 entries matching nozzle_diameter size"
+  );
   const triCount = (model.match(/<triangle /g) || []).length;
   check(triCount === 5 * 12, `3MF triangle count = ${triCount} (expect 60)`);
 

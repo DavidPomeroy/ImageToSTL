@@ -455,11 +455,10 @@ export default function Home() {
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-zinc-600">
-                    Note: Bambu Studio may show an &quot;invalid config&quot; /
-                    &quot;not from Bambu Lab&quot; notification for any 3MF not saved by
-                    Bambu itself — it&apos;s cosmetic. Parts load with extruders
-                    1–4 pre-assigned (embedded Bambu metadata + 3MF colorgroup),
-                    and opening as a project also restores the filament colors.
+                    Bambu Studio: parts load with extruders 1–4 pre-assigned
+                    and the filament section is pre-populated with the part
+                    colors (PLA) — embedded Bambu metadata +
+                    standards-compliant 3MF colorgroup.
                   </p>
                 </div>
               </>

@@ -454,6 +454,13 @@ export default function Home() {
                           : "Download STL zip (4 files)"}
                     </button>
                   </div>
+                  <p className="mt-3 text-xs leading-relaxed text-zinc-600">
+                    Note: Bambu Studio may show an &quot;invalid config — load
+                    geometry data only&quot; notification for any 3MF not saved by
+                    Bambu itself. It&apos;s cosmetic: the parts load normally, and
+                    thanks to the embedded 3MF colorgroup each part is
+                    auto-assigned to its own extruder (1–4).
+                  </p>
                 </div>
               </>
             )}

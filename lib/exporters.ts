@@ -136,14 +136,11 @@ function meshXml(positions: number[]): string {
 }
 
 export function build3MFModelXml(parts: ExportPart[]): string {
-  const materials = parts
-    .map(
-      (p) =>
-        `      <base name="${escapeXml(p.name)}" displaycolor="${rgbToHex(
-          p.color
-        )
-          .toUpperCase()}FF"/>`
-    )
+  // m:colorgroup (3MF materials extension): Bambu Studio parses these and
+  // auto-assigns each unique color to its own extruder. PrusaSlicer/Cura
+  // read colorgroups too.
+  const colors = parts
+    .map((p) => `      <m:color color="${rgbToHex(p.color).toUpperCase()}FF"/>`)
     .join("\n");
 
   const objects = parts
@@ -165,9 +162,9 @@ export function build3MFModelXml(parts: ExportPart[]): string {
   <metadata name="Title">4-color image print</metadata>
   <metadata name="Application">image-to-4color-3dprint</metadata>
   <resources>
-    <basematerials id="1">
-${materials}
-    </basematerials>
+    <m:colorgroup id="1">
+${colors}
+    </m:colorgroup>
 ${objects}
   </resources>
   <build>

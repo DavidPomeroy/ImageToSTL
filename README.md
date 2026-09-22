@@ -23,9 +23,11 @@ Everything runs **client-side in the browser**: no server, no uploads.
    level is extruded to its own height. Rect merging keeps triangle counts
    far below one-box-per-pixel.
 5. **Export** (`lib/exporters.ts`):
-   - **3MF** — one file containing 4 parts (one per color) with
-     `basematerials` display colors. Open in Bambu Studio / PrusaSlicer,
-     import as *one object with multiple parts*, assign an extruder per part.
+   - **3MF** — one file containing 4 parts (one per color) with a
+     `m:colorgroup` (3MF materials extension) carrying the filament colors.
+     Bambu Studio parses the colorgroup and auto-assigns each part to its
+     own extruder (1–4). In PrusaSlicer, import as *one object with multiple
+     parts* and assign extruders.
    - **STL zip** — one binary STL per color, all sharing the same origin, for
      slicers that prefer separate STLs.
 
@@ -96,6 +98,14 @@ lib/exporters.ts   binary STL writer, multi-part 3MF (JSZip) writer
 lib/pipeline.ts    downscale + orchestration glue
 scripts/           core-logic test
 ```
+
+## Bambu Studio note
+
+Opening any 3MF not saved by Bambu Studio may show a notification like *"The
+3mf file has invalid config, load geometry data only"*. This is cosmetic —
+the file simply contains no Bambu project settings. The geometry loads
+normally and the embedded colorgroup still maps each part to its own
+extruder with the right colors.
 
 ## Tips for printing
 

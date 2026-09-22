@@ -338,9 +338,20 @@ async function main() {
   const model = await zip.file("3D/3dmodel.model")!.async("string");
   check((model.match(/<object /g) || []).length === 4, "3MF has 4 objects");
   check((model.match(/<item /g) || []).length === 4, "3MF build has 4 items");
-  check((model.match(/<base /g) || []).length === 4, "3MF has 4 basematerials");
+  check(
+    (model.match(/<m:colorgroup /g) || []).length === 1,
+    "3MF has 1 colorgroup"
+  );
+  check(
+    (model.match(/<m:color /g) || []).length === 4,
+    "3MF colorgroup has 4 colors"
+  );
+  check(
+    (model.match(/pid="1" pindex=/g) || []).length === 4,
+    "all 4 objects reference the colorgroup"
+  );
   check(model.includes('unit="millimeter"'), "3MF units are millimetres");
-  check(/displaycolor="#[0-9A-F]{8}"/.test(model), "3MF colors are #RRGGBBAA");
+  check(/<m:color color="#[0-9A-F]{8}"/.test(model), "3MF colors are #RRGGBBAA");
   const triCount = (model.match(/<triangle /g) || []).length;
   check(triCount === 5 * 12, `3MF triangle count = ${triCount} (expect 60)`);
 
@@ -360,8 +371,8 @@ async function main() {
     "lithophane 3MF has 1 object"
   );
   check(
-    (lithoModel.match(/<base /g) || []).length === 1,
-    "lithophane 3MF has 1 basematerial"
+    (lithoModel.match(/<m:color /g) || []).length === 1,
+    "lithophane 3MF colorgroup has 1 color"
   );
   const lithoStl = buildSTL(lithoPositions);
   check(

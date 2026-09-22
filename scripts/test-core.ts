@@ -18,6 +18,7 @@ import {
   meshPartPositions,
   processImageData,
 } from "../lib/pipeline";
+import { classifyPixels } from "../lib/shapes";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -319,6 +320,113 @@ check(
 for (const m of cmykSmooth.meshes) {
   const bad = countNonManifoldEdges(m.positions);
   check(bad === 0, `smooth CMYK ${m.name}: manifold (${bad} bad edges)`);
+}
+
+console.log("shapes:");
+// circle, size 100%, centered, 1px border on an 8x8 grid
+const cls = classifyPixels(
+  8,
+  8,
+  { type: "circle", cx: 0.5, cy: 0.5, size: 1 },
+  1
+);
+check(cls !== null, "circle shape produces a classification");
+check(cls![4 * 8 + 4] === 2, "circle: center pixel is inside");
+check(cls![4] === 1, "circle: boundary pixel is border");
+check(cls![7 * 8 + 7] === 0, "circle: corner pixel is outside");
+{
+  let n0 = 0,
+    n1 = 0,
+    n2 = 0;
+  for (const c of cls!) {
+    if (c === 0) n0++;
+    else if (c === 1) n1++;
+    else n2++;
+  }
+  check(n0 + n1 + n2 === 64, "classification covers all pixels");
+  check(n1 > 0, `border ring exists (${n1} px)`);
+  check(n2 > n1 && n2 > n0, `inside dominates (${n2} in, ${n0} out)`);
+}
+
+// shape sanity: centers inside, corners outside; star notch concave-out
+for (const t of [
+  "triangle",
+  "hexagon",
+  "heart",
+  "star",
+] as const) {
+  const c = classifyPixels(16, 16, { type: t, cx: 0.5, cy: 0.5, size: 1 }, 0)!;
+  check(c[8 * 16 + 8] === 2, `${t}: center inside`);
+  check(c[0] === 0, `${t}: corner outside`);
+}
+{
+  // square on a wide grid: far side is outside the shape
+  const c = classifyPixels(32, 16, { type: "square", cx: 0.5, cy: 0.5, size: 1 }, 0)!;
+  check(c[8 * 32 + 8] === 2, "square: center inside");
+  check(c[8 * 32 + 0] === 0, "square: far side outside");
+}
+{
+  // star: the concave notch between two points is outside the shape
+  // (needs a fine grid so rounding does not slip back inside)
+  const S = 128;
+  const star = classifyPixels(S, S, { type: "star", cx: 0.5, cy: 0.5, size: 1 }, 0)!;
+  const a = (Math.PI / 2) + (Math.PI / 5); // angle of first inner vertex
+  const r = 0.42 * 1.25; // just past the inner vertex radius
+  const px = Math.round(S / 2 + r * Math.cos(a) * (S / 2));
+  const py = Math.round(S / 2 - r * Math.sin(a) * (S / 2));
+  check(star[py * S + px] === 0, "star: inner notch is outside");
+}
+
+// pipeline integration: circle mask + border on the quadrant mosaic
+const shapedMosaic = processImageData(
+  quadImage,
+  palette,
+  40,
+  5,
+  "mosaic",
+  0.2,
+  0.8,
+  undefined,
+  false,
+  { shape: { type: "circle", cx: 0.5, cy: 0.5, size: 1 }, borderMm: 5 }
+);
+check(
+  shapedMosaic.filledPixels < 63,
+  `circle mask removes pixels (${shapedMosaic.filledPixels}/63 filled)`
+);
+{
+  // every non-empty pixel is inside or border; border pixels are Filament 1
+  let borderPxCount = 0;
+  for (let i = 0; i < shapedMosaic.grid.length; i++) {
+    if (shapedMosaic.grid[i] !== EMPTY && cls![i] === 1) borderPxCount++;
+  }
+  check(borderPxCount > 0, "mosaic: border pixels assigned to Filament 1");
+  for (const m of shapedMosaic.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `shaped mosaic ${m.name}: manifold (${bad} bad edges)`);
+  }
+}
+
+// lithophane with heart mask: outside pixels are empty, manifold
+const shapedLitho = processImageData(
+  gImage,
+  [],
+  80,
+  4,
+  "lithophane",
+  0.2,
+  0.8,
+  undefined,
+  false,
+  { shape: { type: "heart", cx: 0.5, cy: 0.5, size: 1 } }
+);
+check(
+  shapedLitho.filledPixels < 256,
+  `heart mask removes lithophane pixels (${shapedLitho.filledPixels}/256 filled)`
+);
+{
+  const bad = countNonManifoldEdges(shapedLitho.meshes[0].positions);
+  check(bad === 0, `heart lithophane manifold (${bad} bad edges)`);
 }
 
 console.log("exports:");

@@ -116,6 +116,22 @@ scripts/           core-logic test
   filament colors come from the color-mapping dialog / your own filament
   choices.
 
+## Shapes & borders
+
+Besides the full-rectangle plate, the print can take a **square, triangle,
+hexagon, circle, heart or star** outline. Click or drag on the processed
+preview to position the shape, and scale it as a percentage of the plate.
+Pixels outside the shape become empty space, exactly like transparency.
+
+A **border** (0–5 mm) can be added to any shape (the full rectangle gets a
+frame around the image). Border rendering per mode:
+- Mosaic / Layered: Filament 1 (darkest auto-detected colour)
+- Lithophane: maximum thickness (darkest backlit)
+- CMYK: solid dark (full CMY + max white)
+
+Meshes stay manifold — diagonal pinch points (thin diagonal connections)
+are nudged by one pixel where needed, invisible at print scale.
+
 ## Tips for printing
 
 - Keep the pixel size ≥ your nozzle diameter (the app warns below 0.4 mm):

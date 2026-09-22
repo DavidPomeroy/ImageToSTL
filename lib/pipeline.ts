@@ -30,6 +30,7 @@ import {
   buildHeightfieldGeometry,
   buildSmoothHeightfieldGeometry,
 } from "./mesh";
+import { classifyPixels, type ShapeParams } from "./shapes";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
 
@@ -248,17 +249,48 @@ export function processImageData(
   layerHeight = 0.2,
   minThickness = 0.8,
   cmyk?: CmykOptions,
-  smooth = false
+  smooth = false,
+  shapeOpts?: { shape?: ShapeParams; borderMm?: number }
 ): ProcessedImage {
   const gw = imageData.width;
   const gh = imageData.height;
   const n = gw * gh;
   const pixelSize = widthMm / gw;
 
+  // shape mask / border classification (0 = outside, 1 = border, 2 = inside)
+  const shape = shapeOpts?.shape;
+  const borderMm = shapeOpts?.borderMm ?? 0;
+  const cls =
+    shape || borderMm > 0
+      ? classifyPixels(
+          gw,
+          gh,
+          shape ?? { type: "rectangle", cx: 0.5, cy: 0.5, size: 1 },
+          borderMm / pixelSize
+        )
+      : null;
+
   // ---- CMYK lithophane: C/M/Y color layers + white relief, 4 parts
   if (mode === "cmyk") {
     const o = cmyk ?? DEFAULT_CMYK;
     const stacks = computeCmykStacks(imageData, o);
+    if (cls) {
+      for (let i = 0; i < n; i++) {
+        const c = cls[i];
+        if (c === 0) {
+          stacks.c[i] = 0;
+          stacks.m[i] = 0;
+          stacks.y[i] = 0;
+          stacks.w[i] = 0;
+        } else if (c === 1) {
+          // border: full CMY + max white -> solid dark frame backlit
+          stacks.c[i] = o.colorLayers;
+          stacks.m[i] = o.colorLayers;
+          stacks.y[i] = o.colorLayers;
+          stacks.w[i] = o.whiteMaxLayers;
+        }
+      }
+    }
     const lh = Math.max(0.04, layerHeight);
 
     let maxZ = 0;
@@ -340,6 +372,13 @@ export function processImageData(
       depthMm,
       layerHeight
     );
+    if (cls) {
+      for (let i = 0; i < n; i++) {
+        const c = cls[i];
+        if (c === 0) heights[i] = 0;
+        else if (c === 1) heights[i] = maxMm; // border: thickest = darkest
+      }
+    }
     let opaque = 0;
     for (let i = 0; i < n; i++) if (heights[i] > 0) opaque++;
     const z0s = new Float32Array(n); // all zero: every column starts at z=0
@@ -374,6 +413,38 @@ export function processImageData(
 
   // ---- palette-based modes (mosaic / layered)
   const grid = mapPixelsToPalette(imageData.data, palette);
+  if (cls) {
+    for (let i = 0; i < n; i++) {
+      const c = cls[i];
+      if (c === 0) grid[i] = EMPTY;
+      else if (c === 1) grid[i] = 0; // border: Filament 1 (darkest)
+    }
+  }
+
+  // Per-color diagonal pinch fill: two same-colour cells touching only
+  // diagonally leave a non-manifold edge in that colour's mesh (the other
+  // two cells belong to different colours or are empty). Fill one of them
+  // with the pair's colour — a 1-pixel nudge, invisible at print scale.
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < gh - 1; y++) {
+      for (let x = 0; x < gw - 1; x++) {
+        const i = y * gw + x;
+        const a = grid[i];
+        const b = grid[i + gw + 1];
+        if (a !== EMPTY && a === b) {
+          const c1 = grid[i + 1];
+          const c2 = grid[i + gw];
+          if (c1 !== a && c2 !== a) grid[i + 1] = a;
+        } else {
+          const a2 = grid[i + 1];
+          const b2 = grid[i + gw];
+          if (a2 !== EMPTY && a2 === b2) {
+            if (grid[i] !== a2 && grid[i + gw + 1] !== a2) grid[i] = a2;
+          }
+        }
+      }
+    }
+  }
 
   const counts = new Array<number>(palette.length).fill(0);
   let filled = 0;

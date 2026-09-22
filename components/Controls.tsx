@@ -1,6 +1,17 @@
 "use client";
 
 import type { PrintMode } from "@/lib/pipeline";
+import type { ShapeType } from "@/lib/shapes";
+
+const SHAPE_BUTTONS: [ShapeType, string][] = [
+  ["rectangle", "Full"],
+  ["square", "Square"],
+  ["triangle", "Triangle"],
+  ["hexagon", "Hexagon"],
+  ["circle", "Circle"],
+  ["heart", "Heart"],
+  ["star", "Star"],
+];
 
 interface SliderProps {
   label: string;
@@ -64,6 +75,9 @@ export default function Controls(props: {
   whiteMinLayers: number;
   whiteMaxLayers: number;
   smooth: boolean;
+  shapeType: ShapeType;
+  shapeSize: number;
+  borderMm: number;
   onMode: (m: PrintMode) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
@@ -74,6 +88,9 @@ export default function Controls(props: {
   onWhiteMinLayers: (v: number) => void;
   onWhiteMaxLayers: (v: number) => void;
   onSmooth: (v: boolean) => void;
+  onShapeType: (t: ShapeType) => void;
+  onShapeSize: (v: number) => void;
+  onBorderMm: (v: number) => void;
 }) {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
@@ -141,6 +158,63 @@ export default function Controls(props: {
         unit=" px"
         onChange={props.onResolution}
       />
+      <div>
+        <div className="mb-1 text-sm text-zinc-300">Shape</div>
+        <div className="grid grid-cols-4 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+          {SHAPE_BUTTONS.map(([t, label]) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => props.onShapeType(t)}
+              className={`rounded-md border px-1 py-2 text-center text-xs font-medium transition-colors ${
+                props.shapeType === t
+                  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+                  : "border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {props.shapeType !== "rectangle" && (
+          <>
+            <div className="mt-3">
+              <Slider
+                label="Shape size"
+                value={Math.round(props.shapeSize * 100)}
+                min={5}
+                max={150}
+                step={5}
+                unit="%"
+                onChange={(v) => props.onShapeSize(v / 100)}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-zinc-500">
+              Click or drag on the preview to position the shape.
+            </p>
+          </>
+        )}
+      </div>
+
+      <Slider
+        label="Border width"
+        value={props.borderMm}
+        min={0}
+        max={5}
+        step={0.25}
+        unit=" mm"
+        onChange={props.onBorderMm}
+      />
+      {props.borderMm > 0 && (
+        <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
+          {layered || litho
+            ? "Border prints in Filament 1."
+            : cmyk
+              ? "Border prints solid dark (full CMY + max white)."
+              : "Border prints at maximum thickness (darkest backlit)."}
+        </p>
+      )}
+
       <Slider
         label="Plate width"
         value={props.widthMm}

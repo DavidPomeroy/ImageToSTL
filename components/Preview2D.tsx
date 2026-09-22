@@ -2,6 +2,18 @@
 
 import { useEffect, useRef } from "react";
 import { EMPTY, type RGB } from "@/lib/quantize";
+import { shapeOutlinePoints, type ShapeType } from "@/lib/shapes";
+
+export interface ShapeOverlay {
+  type: ShapeType;
+  /** center in image pixels */
+  cx: number;
+  cy: number;
+  /** shape radius in image pixels */
+  radiusPx: number;
+  /** border width in image pixels (visualised as a thick outline) */
+  borderPx: number;
+}
 
 export default function Preview2D({
   grid,
@@ -12,6 +24,8 @@ export default function Preview2D({
   hMin,
   hMax,
   cmykPreview,
+  shapeOverlay,
+  onShapeMove,
 }: {
   grid: Uint8Array;
   gw: number;
@@ -23,8 +37,13 @@ export default function Preview2D({
   hMax?: number;
   /** CMYK lithophane: simulated backlit RGBA, drawn directly. */
   cmykPreview?: Uint8ClampedArray;
+  /** Outline + crosshair overlay for the selected shape. */
+  shapeOverlay?: ShapeOverlay | null;
+  /** Click/drag on the preview moves the shape center (normalized 0..1). */
+  onShapeMove?: (cx: number, cy: number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const dragging = useRef(false);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -65,12 +84,78 @@ export default function Preview2D({
       }
     }
     ctx.putImageData(img, 0, 0);
-  }, [grid, gw, gh, palette, heights, hMin, hMax, cmykPreview]);
+
+    // shape outline + center crosshair
+    if (shapeOverlay) {
+      const { type, cx, cy, radiusPx, borderPx } = shapeOverlay;
+      if (type !== "rectangle") {
+        const pts = shapeOutlinePoints(type);
+        ctx.strokeStyle = "rgba(52, 211, 153, 0.9)";
+        ctx.lineWidth = Math.max(1, borderPx > 0 ? Math.max(1, borderPx * 2) : 1);
+        ctx.beginPath();
+        for (let k = 0; k < pts.length; k++) {
+          const [ux, uy] = pts[k];
+          const px = cx + ux * radiusPx;
+          const py = cy - uy * radiusPx; // image y grows downward
+          if (k === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        // center crosshair
+        ctx.strokeStyle = "rgba(52, 211, 153, 0.7)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx - radiusPx * 0.08, cy);
+        ctx.lineTo(cx + radiusPx * 0.08, cy);
+        ctx.moveTo(cx, cy - radiusPx * 0.08);
+        ctx.lineTo(cx, cy + radiusPx * 0.08);
+        ctx.stroke();
+      }
+    }
+  }, [
+    grid,
+    gw,
+    gh,
+    palette,
+    heights,
+    hMin,
+    hMax,
+    cmykPreview,
+    shapeOverlay,
+  ]);
+
+  const pick = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = ref.current;
+    if (!canvas || !onShapeMove) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) / rect.width;
+    const cy = (e.clientY - rect.top) / rect.height;
+    onShapeMove(
+      Math.max(0, Math.min(1, cx)),
+      Math.max(0, Math.min(1, cy))
+    );
+  };
 
   return (
     <canvas
       ref={ref}
-      className="w-full rounded-lg border border-zinc-800 [background:repeating-conic-gradient(#27272a_0%_25%,#18181b_0%_50%)] [background-size:16px_16px] [image-rendering:pixelated]"
+      onPointerDown={(e) => {
+        if (!onShapeMove) return;
+        dragging.current = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        pick(e);
+      }}
+      onPointerMove={(e) => {
+        if (!dragging.current) return;
+        pick(e);
+      }}
+      onPointerUp={() => {
+        dragging.current = false;
+      }}
+      className={`w-full rounded-lg border border-zinc-800 [background:repeating-conic-gradient(#27272a_0%_25%,#18181b_0%_50%)] [background-size:16px_16px] [image-rendering:pixelated] ${
+        onShapeMove ? "cursor-crosshair" : ""
+      }`}
     />
   );
 }

@@ -14,6 +14,7 @@ import {
   type ProcessedImage,
 } from "@/lib/pipeline";
 import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
+import type { ShapeType } from "@/lib/shapes";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 
 const Preview3D = dynamic(() => import("@/components/Preview3D"), {
@@ -61,9 +62,16 @@ export default function Home() {
   const [palette, setPalette] = useState<RGB[]>([]);
   const [fitNonce, setFitNonce] = useState(0);
   const [smooth, setSmooth] = useState(false);
+  const [shapeType, setShapeType] = useState<ShapeType>("rectangle");
+  const [shapeCx, setShapeCx] = useState(0.5);
+  const [shapeCy, setShapeCy] = useState(0.5);
+  const [shapeSize, setShapeSize] = useState(1);
+  const [borderMm, setBorderMm] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
 
   const debouncedResolution = useDebouncedValue(resolution, 150);
+  const shapePos = useMemo(() => ({ cx: shapeCx, cy: shapeCy }), [shapeCx, shapeCy]);
+  const debouncedShapePos = useDebouncedValue(shapePos, 120);
 
   const onFile = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -105,9 +113,21 @@ export default function Home() {
             whiteMinLayers,
             whiteMaxLayers,
           },
-          smooth)
+          smooth,
+          {
+            shape:
+              shapeType === "rectangle"
+                ? undefined
+                : {
+                    type: shapeType,
+                    cx: debouncedShapePos.cx,
+                    cy: debouncedShapePos.cy,
+                    size: shapeSize,
+                  },
+            borderMm,
+          })
         : null,
-    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth]
+    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth, shapeType, debouncedShapePos, shapeSize, borderMm]
   );
 
   const exportParts = useMemo(
@@ -199,6 +219,9 @@ export default function Home() {
                 whiteMinLayers={whiteMinLayers}
                 whiteMaxLayers={whiteMaxLayers}
                 smooth={smooth}
+                shapeType={shapeType}
+                shapeSize={shapeSize}
+                borderMm={borderMm}
                 onMode={setMode}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
@@ -209,6 +232,9 @@ export default function Home() {
                 onWhiteMinLayers={setWhiteMinLayers}
                 onWhiteMaxLayers={setWhiteMaxLayers}
                 onSmooth={setSmooth}
+                onShapeType={setShapeType}
+                onShapeSize={setShapeSize}
+                onBorderMm={setBorderMm}
               />
               {processed && processed.pixelSizeMm < 0.4 && (
                 <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
@@ -351,6 +377,23 @@ export default function Home() {
                       hMin={processed.minThicknessMm}
                       hMax={processed.depthMm}
                       cmykPreview={processed.cmykPreview}
+                      shapeOverlay={
+                        shapeType !== "rectangle" && processed
+                          ? {
+                              type: shapeType,
+                              cx: shapeCx * processed.gw,
+                              cy: shapeCy * processed.gh,
+                              radiusPx: (shapeSize * Math.min(processed.gw, processed.gh)) / 2,
+                              borderPx: borderMm / processed.pixelSizeMm,
+                            }
+                          : null
+                      }
+                      onShapeMove={
+                        shapeType !== "rectangle" ? (cx, cy) => {
+                          setShapeCx(cx);
+                          setShapeCy(cy);
+                        } : undefined
+                      }
                     />
                     <dl className="mt-3 space-y-1 text-xs">
                       <div className="flex justify-between">

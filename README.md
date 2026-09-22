@@ -132,6 +132,17 @@ frame around the image). Border rendering per mode:
 Meshes stay manifold — diagonal pinch points (thin diagonal connections)
 are nudged by one pixel where needed, invisible at print scale.
 
+## Curvature
+
+The flat plate can be bent around a vertical (image-height) axis, from flat
+(0°) to a **full cylinder (360°)** — the classic curved lithophane / lamp
+shade. The plate width becomes the inner surface's arc length (bend radius
+shown in the stats when curved), the image faces outward, and the solid is
+re-seated on the bed automatically. Full 360° is clamped internally to
+359.5° so the seam edges never coincide — the tiny gap prints cleanly and is
+handy for lamp fittings. Works with every mode, shape and border, and with
+both pixelated and smoothed surfaces.
+
 ## Tips for printing
 
 - Keep the pixel size ≥ your nozzle diameter (the app warns below 0.4 mm):

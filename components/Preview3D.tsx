@@ -130,11 +130,16 @@ export default function Preview3D({
       group.add(new THREE.Mesh(geo, mat));
     }
 
-    // Model occupies x:[0,W] y:[0,H] z:[0,D]. After the group's -90° X
-    // rotation, world coords are (x, z, -y): center on origin, base on y=0.
-    group.position.set(-processed.widthMm / 2, 0, processed.heightMm / 2);
+    // Center the solid (accounting for curvature) and rest the base on y=0
+    // after the group's -90° X rotation: world = (x, z, -y).
+    group.position.set(-processed.centerMm.x, 0, processed.centerMm.y);
 
-    const maxDim = Math.max(processed.widthMm, processed.heightMm, 10);
+    const maxDim = Math.max(
+      processed.bboxMm.x,
+      processed.bboxMm.y,
+      processed.bboxMm.z,
+      10
+    );
     grid.scale.setScalar(maxDim / 200);
 
     // fit the camera only on first load / new image / "reset view"
@@ -146,7 +151,7 @@ export default function Preview3D({
       camera.near = Math.max(0.1, dist / 200);
       camera.far = dist * 20;
       camera.updateProjectionMatrix();
-      controls.target.set(0, processed.depthMm, 0);
+      controls.target.set(0, processed.bboxMm.z / 2, 0);
       controls.update();
     }
   }, [processed, fitNonce]);

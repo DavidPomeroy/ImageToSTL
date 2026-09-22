@@ -19,6 +19,7 @@ import {
   processImageData,
 } from "../lib/pipeline";
 import { classifyPixels } from "../lib/shapes";
+import { applyCurve, curveRadius } from "../lib/curve";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -428,6 +429,91 @@ check(
   const bad = countNonManifoldEdges(shapedLitho.meshes[0].positions);
   check(bad === 0, `heart lithophane manifold (${bad} bad edges)`);
 }
+
+console.log("curvature:");
+// radius math
+check(curveRadius(100, 0) === Infinity, "flat -> infinite radius");
+check(
+  Math.abs(curveRadius(100, 180) - 100 / Math.PI) < 1e-9,
+  "180deg -> R = width / pi"
+);
+
+// transform math: single vertex checks via a tiny synthetic mesh
+{
+  // 1x1 pixel cell, pixelSize 10, top face at z=2
+  const pos = [
+    0, 0, 2, 10, 0, 2, 10, 10, 2,
+    0, 0, 2, 10, 10, 2, 0, 10, 2,
+  ];
+  applyCurve(pos, 10, 180);
+  const R = 10 / Math.PI;
+  // bed placement: min Z = 0
+  let minZ = Infinity;
+  for (let i = 2; i < pos.length; i += 3) minZ = Math.min(minZ, pos[i]);
+  check(Math.abs(minZ) < 1e-6, "curved mesh rests on the bed (min Z = 0)");
+  // seam edges (x=0/10 -> phi=+-90deg) sit at |X| = R + 2, center back at z = R
+  const xs = pos.filter((_, i) => i % 3 === 0);
+  check(
+    Math.abs(Math.max(...xs) - (R + 2)) < 1e-6 &&
+      Math.abs(Math.min(...xs) + (R + 2)) < 1e-6,
+    `180deg half-cylinder spans +/-(R+z) in X`
+  );
+  // the top-center vertex (x=5, z=2) lands at X=0, Z=R+2
+  check(
+    pos.some((_, i) => Math.abs(pos[i]) < 1e-6 && Math.abs(pos[i + 2] - (R + 2)) < 1e-6),
+    "top-center vertex at (0, R+z)"
+  );
+}
+
+// integration: curved lithophane stays manifold with a sane bbox
+const curvedLitho = processImageData(
+  gImage,
+  [],
+  80,
+  4,
+  "lithophane",
+  0.2,
+  0.8,
+  undefined,
+  false,
+  undefined,
+  180
+);
+{
+  const bad = countNonManifoldEdges(curvedLitho.meshes[0].positions);
+  check(bad === 0, `curved lithophane manifold (${bad} bad edges)`);
+  const R = 80 / Math.PI;
+  // peak Z = (R + h(x)) * cos(phi); the thickest pixels sit near the seam
+  // where cos -> 0, so the extent is between R and R + max thickness
+  check(
+    curvedLitho.bboxMm.z > R && curvedLitho.bboxMm.z < R + 4,
+    `curved lithophane Z extent sane (${curvedLitho.bboxMm.z.toFixed(1)})`
+  );
+}
+
+// full cylinder (clamped to 359.5deg to keep the seam open)
+const cylinder = processImageData(
+  quadImage,
+  palette,
+  40,
+  5,
+  "mosaic",
+  0.2,
+  0.8,
+  undefined,
+  false,
+  undefined,
+  360
+);
+for (const m of cylinder.meshes) {
+  const bad = countNonManifoldEdges(m.positions);
+  check(bad === 0, `cylinder mosaic ${m.name}: manifold (${bad} bad edges)`);
+}
+// full cylinder: outer diameter = 2 * (R + depth)
+check(
+  Math.abs(cylinder.bboxMm.x - 2 * (curveRadius(40, 360) + 5)) < 1,
+  `full-cylinder outer diameter (${cylinder.bboxMm.x.toFixed(1)})`
+);
 
 console.log("exports:");
 async function main() {

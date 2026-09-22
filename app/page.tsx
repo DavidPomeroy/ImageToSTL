@@ -15,6 +15,7 @@ import {
 } from "@/lib/pipeline";
 import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
 import type { ShapeType } from "@/lib/shapes";
+import { curveRadius } from "@/lib/curve";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 
 const Preview3D = dynamic(() => import("@/components/Preview3D"), {
@@ -67,6 +68,7 @@ export default function Home() {
   const [shapeCy, setShapeCy] = useState(0.5);
   const [shapeSize, setShapeSize] = useState(1);
   const [borderMm, setBorderMm] = useState(0);
+  const [curveDeg, setCurveDeg] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
 
   const debouncedResolution = useDebouncedValue(resolution, 150);
@@ -125,9 +127,10 @@ export default function Home() {
                     size: shapeSize,
                   },
             borderMm,
-          })
+          },
+          curveDeg)
         : null,
-    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth, shapeType, debouncedShapePos, shapeSize, borderMm]
+    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth, shapeType, debouncedShapePos, shapeSize, borderMm, curveDeg]
   );
 
   const exportParts = useMemo(
@@ -222,6 +225,7 @@ export default function Home() {
                 shapeType={shapeType}
                 shapeSize={shapeSize}
                 borderMm={borderMm}
+                curveDeg={curveDeg}
                 onMode={setMode}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
@@ -235,6 +239,7 @@ export default function Home() {
                 onShapeType={setShapeType}
                 onShapeSize={setShapeSize}
                 onBorderMm={setBorderMm}
+                onCurveDeg={setCurveDeg}
               />
               {processed && processed.pixelSizeMm < 0.4 && (
                 <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
@@ -430,6 +435,14 @@ export default function Home() {
                             {Math.round(
                               processed.depthMm / processed.layerHeight
                             )}
+                          </dd>
+                        </div>
+                      )}
+                      {curveDeg > 0 && (
+                        <div className="flex justify-between">
+                          <dt className="text-zinc-500">Bend radius</dt>
+                          <dd className="tabular-nums text-zinc-300">
+                            {curveRadius(processed.widthMm, curveDeg).toFixed(1)} mm
                           </dd>
                         </div>
                       )}

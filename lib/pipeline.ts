@@ -31,6 +31,7 @@ import {
   buildSmoothHeightfieldGeometry,
 } from "./mesh";
 import { classifyPixels, type ShapeParams } from "./shapes";
+import { applyCurve } from "./curve";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
 
@@ -76,9 +77,58 @@ export interface ProcessedImage {
   minThicknessMm?: number;
   /** CMYK lithophane: simulated backlit appearance (RGBA, 0 alpha = empty). */
   cmykPreview?: Uint8ClampedArray;
+  /** Bounding-box extents after curvature (mm). */
+  bboxMm: { x: number; y: number; z: number };
+  /** Model-space center of the combined solid (mm), for view fitting. */
+  centerMm: { x: number; y: number };
 }
 
 const fmtZ = (n: number): string => String(Number(n.toFixed(2)));
+
+function meshBounds(meshes: ColorMeshData[]): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+} {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity,
+    minZ = Infinity,
+    maxZ = -Infinity;
+  for (const m of meshes) {
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const x = m.positions[i],
+        y = m.positions[i + 1],
+        z = m.positions[i + 2];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+  }
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+function boundsFields(meshes: ColorMeshData[]) {
+  const bb = meshBounds(meshes);
+  return {
+    bboxMm: {
+      x: bb.maxX - bb.minX,
+      y: bb.maxY - bb.minY,
+      z: bb.maxZ - bb.minZ,
+    },
+    centerMm: {
+      x: (bb.minX + bb.maxX) / 2,
+      y: (bb.minY + bb.maxY) / 2,
+    },
+  };
+}
 
 /**
  * Split `depthMm` into `count` color bands snapped to whole multiples of
@@ -250,7 +300,8 @@ export function processImageData(
   minThickness = 0.8,
   cmyk?: CmykOptions,
   smooth = false,
-  shapeOpts?: { shape?: ShapeParams; borderMm?: number }
+  shapeOpts?: { shape?: ShapeParams; borderMm?: number },
+  curveDeg = 0
 ): ProcessedImage {
   const gw = imageData.width;
   const gh = imageData.height;
@@ -346,6 +397,9 @@ export function processImageData(
       });
     }
 
+    if (curveDeg > 0.01) {
+      for (const m of meshes) applyCurve(m.positions, widthMm, curveDeg);
+    }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `cmykPreview`
       gw,
@@ -361,6 +415,7 @@ export function processImageData(
       pixelSizeMm: pixelSize,
       triangleCount: meshes.reduce((sum, mm) => sum + mm.positions.length, 0) / 9,
       cmykPreview: simulateCmykPreview(stacks, o),
+      ...boundsFields(meshes),
     };
   }
 
@@ -392,6 +447,9 @@ export function processImageData(
         ? buildSmoothHeightfieldGeometry(z0s, heights, gw, gh, pixelSize)
         : buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
     };
+    if (curveDeg > 0.01) {
+      applyCurve(mesh.positions, widthMm, curveDeg);
+    }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `heights`
       gw,
@@ -408,6 +466,7 @@ export function processImageData(
       triangleCount: mesh.positions.length / 9,
       heights,
       minThicknessMm: minMm,
+      ...boundsFields([mesh]),
     };
   }
 
@@ -517,6 +576,9 @@ export function processImageData(
   const triangleCount =
     meshes.reduce((sum, m) => sum + m.positions.length, 0) / 9;
 
+  if (curveDeg > 0.01) {
+    for (const m of meshes) applyCurve(m.positions, widthMm, curveDeg);
+  }
   return {
     grid,
     gw,
@@ -531,6 +593,7 @@ export function processImageData(
     depthMm: effectiveDepth,
     pixelSizeMm: pixelSize,
     triangleCount,
+    ...boundsFields(meshes),
   };
 }
 

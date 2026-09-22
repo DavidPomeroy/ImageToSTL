@@ -78,6 +78,7 @@ export default function Controls(props: {
   shapeType: ShapeType;
   shapeSize: number;
   borderMm: number;
+  curveDeg: number;
   onMode: (m: PrintMode) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
@@ -91,6 +92,7 @@ export default function Controls(props: {
   onShapeType: (t: ShapeType) => void;
   onShapeSize: (v: number) => void;
   onBorderMm: (v: number) => void;
+  onCurveDeg: (v: number) => void;
 }) {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
@@ -212,6 +214,21 @@ export default function Controls(props: {
             : cmyk
               ? "Border prints solid dark (full CMY + max white)."
               : "Border prints at maximum thickness (darkest backlit)."}
+        </p>
+      )}
+      <Slider
+        label="Curvature"
+        value={props.curveDeg}
+        min={0}
+        max={360}
+        step={10}
+        unit="°"
+        onChange={props.onCurveDeg}
+      />
+      {props.curveDeg > 0 && (
+        <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
+          The plate bends around a vertical axis — image surface faces outward.
+          360° closes into a cylinder (with a tiny printable seam gap).
         </p>
       )}
 

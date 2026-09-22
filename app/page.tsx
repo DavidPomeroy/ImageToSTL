@@ -10,6 +10,7 @@ import {
   downscaleImageData,
   meshPartPositions,
   processImageData,
+  type PrintMode,
   type ProcessedImage,
 } from "@/lib/pipeline";
 import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
@@ -47,9 +48,11 @@ function saveBlob(blob: Blob, name: string) {
 export default function Home() {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageName, setImageName] = useState("image");
+  const [mode, setMode] = useState<PrintMode>("mosaic");
   const [resolution, setResolution] = useState(120);
   const [widthMm, setWidthMm] = useState(100);
   const [depthMm, setDepthMm] = useState(5);
+  const [layerHeight, setLayerHeight] = useState(0.2);
   const [palette, setPalette] = useState<RGB[]>([]);
   const [fitNonce, setFitNonce] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
@@ -87,9 +90,9 @@ export default function Home() {
   const processed: ProcessedImage | null = useMemo(
     () =>
       imageData && palette.length > 0
-        ? processImageData(imageData, palette, widthMm, depthMm)
+        ? processImageData(imageData, palette, widthMm, depthMm, mode, layerHeight)
         : null,
-    [imageData, palette, widthMm, depthMm]
+    [imageData, palette, widthMm, depthMm, mode, layerHeight]
   );
 
   const exportParts = useMemo(
@@ -105,27 +108,31 @@ export default function Home() {
     if (!hasGeometry) return;
     setBusy("3mf");
     try {
-      saveBlob(await build3MF(exportParts), `${imageName}-4color.3mf`);
+      saveBlob(await build3MF(exportParts), `${imageName}-4color-${mode}.3mf`);
     } finally {
       setBusy(null);
     }
-  }, [exportParts, hasGeometry, imageName]);
+  }, [exportParts, hasGeometry, imageName, mode]);
 
   const downloadSTLs = useCallback(async () => {
     if (!hasGeometry) return;
     setBusy("stl");
     try {
-      saveBlob(await buildSTLZip(exportParts), `${imageName}-4color-stls.zip`);
+      saveBlob(
+        await buildSTLZip(exportParts),
+        `${imageName}-4color-${mode}-stls.zip`
+      );
     } finally {
       setBusy(null);
     }
-  }, [exportParts, hasGeometry, imageName]);
+  }, [exportParts, hasGeometry, imageName, mode]);
 
   const counts = processed ? processed.meshes.map((m) => m.pixelCount) : [];
   const pixelArea = processed ? processed.pixelSizeMm ** 2 : 0;
   const boxCount = processed
     ? processed.meshes.reduce((s, m) => s + m.boxes.length, 0)
     : 0;
+  const swapBands = processed ? processed.bands.slice(1) : [];
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -135,10 +142,11 @@ export default function Home() {
             Image <span className="text-zinc-500">→</span> 4-Color 3D Print
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Upload an image and turn it into a flat, 5&nbsp;mm thick plate made
-            of 4 filament colors — exported as a multi-part 3MF (or 4 STLs)
-            ready for multi-material printing in Bambu Studio or PrusaSlicer.
-            Everything runs locally in your browser.
+            Upload an image and turn it into a 4-color, 5&nbsp;mm deep
+            3D-printable plate — as a flat multi-material mosaic or a
+            HueForge-style layered relief. Exports as a multi-part 3MF (or 4
+            STLs) ready for Bambu Studio or PrusaSlicer. Everything runs
+            locally in your browser.
           </p>
         </header>
 
@@ -156,12 +164,16 @@ export default function Home() {
                 2 · Print settings
               </h2>
               <Controls
+                mode={mode}
                 resolution={resolution}
                 widthMm={widthMm}
                 depthMm={depthMm}
+                layerHeight={layerHeight}
+                onMode={setMode}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
                 onDepthMm={setDepthMm}
+                onLayerHeight={setLayerHeight}
               />
               {processed && processed.pixelSizeMm < 0.4 && (
                 <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
@@ -176,12 +188,16 @@ export default function Home() {
             {processed && (
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                  3 · Filament colors
+                  {mode === "layered"
+                    ? "3 · Filament stack (bottom → top)"
+                    : "3 · Filament colors"}
                 </h2>
                 <PaletteEditor
                   palette={palette}
                   counts={counts}
                   pixelArea={pixelArea}
+                  bands={processed.bands}
+                  stacked={mode === "layered"}
                   onChange={(i, c) =>
                     setPalette((p) => {
                       const n = [...p];
@@ -194,7 +210,6 @@ export default function Home() {
               </section>
             )}
           </aside>
-
 
           <section className="min-w-0 space-y-6">
             {!processed || !hasGeometry ? (
@@ -217,8 +232,9 @@ export default function Home() {
                   No image yet
                 </h3>
                 <p className="mt-1 max-w-sm text-sm text-zinc-500">
-                  Upload an image to generate a flat 4-color plate, {depthMm}
-                  &nbsp;mm thick, ready for multi-material printing.
+                  Upload an image to generate a 4-color printable plate —
+                  flat mosaic or HueForge-style layered relief, up to{" "}
+                  {depthMm}&nbsp;mm deep.
                 </p>
                 <ol className="mt-6 space-y-2 text-left text-sm text-zinc-500">
                   <li>
@@ -253,10 +269,19 @@ export default function Home() {
                         <dt className="text-zinc-500">Plate size</dt>
                         <dd className="tabular-nums text-zinc-300">
                           {processed.widthMm.toFixed(0)} ×{" "}
-                          {processed.heightMm.toFixed(1)} × {processed.depthMm}{" "}
-                          mm
+                          {processed.heightMm.toFixed(1)} ×{" "}
+                          {processed.depthMm.toFixed(1)} mm
                         </dd>
                       </div>
+                      {processed.mode === "layered" && processed.bands.length > 0 && (
+                        <div className="flex justify-between">
+                          <dt className="text-zinc-500">Height range</dt>
+                          <dd className="tabular-nums text-zinc-300">
+                            {processed.bands[0].z1.toFixed(1)} –{" "}
+                            {processed.depthMm.toFixed(1)} mm (relief)
+                          </dd>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <dt className="text-zinc-500">Pixel size</dt>
                         <dd className="tabular-nums text-zinc-300">
@@ -299,12 +324,20 @@ export default function Home() {
                   </h3>
                   <p className="mb-4 max-w-2xl text-xs leading-relaxed text-zinc-500">
                     The 3MF bundles all 4 color parts with their filament
-                    colors: open it in Bambu Studio / PrusaSlicer, import as one
-                    object with multiple parts, and assign an extruder to each
-                    color. Or grab the STL zip and import all 4 files together,
-                    aligned at the origin. Slice at 0.2&nbsp;mm layer height or
-                    finer.
+                    colors: open it in Bambu Studio / PrusaSlicer, import as
+                    one object with multiple parts, and assign an extruder to
+                    each color. Or grab the STL zip and import all 4 files
+                    together, aligned at the origin.
                   </p>
+                  {processed.mode === "layered" && swapBands.length > 0 && (
+                    <p className="mb-4 max-w-2xl rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-emerald-300/90">
+                      Slice at {processed.layerHeight}&nbsp;mm layer height
+                      and swap filaments at z ={" "}
+                      {swapBands.map((b) => b.z0.toFixed(1)).join(", ")}
+                      &nbsp;mm (layers{" "}
+                      {swapBands.map((b) => b.layer0).join(", ")}).
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
@@ -340,4 +373,3 @@ export default function Home() {
     </main>
   );
 }
-

@@ -14,6 +14,7 @@ import {
 } from "../lib/quantize";
 import { buildRectsForColor, meshPositions, rectsToBoxes } from "../lib/mesh";
 import { build3MF, buildSTL, buildSTLZip } from "../lib/exporters";
+import { meshPartPositions, processImageData } from "../lib/pipeline";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -119,7 +120,7 @@ const pixelSize = 40 / W; // 40mm wide plate
 const depth = 5;
 const parts = palette.map((color, i) => {
   const boxes = rectsToBoxes(rectsPerColor[i], H, pixelSize);
-  return { name: `Color ${i + 1}`, color, positions: meshPositions(boxes, depth) };
+  return { name: `Color ${i + 1}`, color, positions: meshPositions(boxes, 0, depth) };
 });
 
 for (const p of parts) {
@@ -143,6 +144,62 @@ check(stl.byteLength === 84 + 12 * 50, `binary STL size correct (${stl.byteLengt
 const dv = new DataView(stl);
 check(dv.getUint32(80, true) === 12, "STL triangle count = 12");
 
+console.log("layered (HueForge-style) mode:");
+const fakeImageData = { data, width: W, height: H } as unknown as ImageData;
+const layered = processImageData(fakeImageData, palette, 40, 5, "layered", 0.2);
+
+check(layered.bands.length === 4, `4 color bands (got ${layered.bands.length})`);
+const expectedTops = [1.2, 2.6, 3.8, 5.0];
+check(
+  layered.bands.every((b, i) => Math.abs(b.z1 - expectedTops[i]) < 1e-6),
+  `band tops snap to layers [${layered.bands.map((b) => b.z1.toFixed(2)).join(", ")}] (expect 1.20, 2.60, 3.80, 5.00)`
+);
+check(Math.abs(layered.depthMm - 5) < 1e-6, "effective depth = 5 mm");
+
+// band coverage must nest: band k covers pixels with palette index >= k
+const pxArea = layered.pixelSizeMm ** 2;
+const bandAreas = layered.meshes.map(
+  (m) => m.boxes.reduce((sum, b) => sum + b.w * b.h, 0) / pxArea
+);
+check(
+  bandAreas.join(",") === "63,47,32,16",
+  `band pixel coverage nests 63,47,32,16 (got ${bandAreas.join(",")})`
+);
+
+for (let i = 0; i < 4; i++) {
+  const m = layered.meshes[i];
+  const wantZ0 = i === 0 ? 0 : layered.bands[i - 1].z1;
+  check(
+    Math.abs(m.z0 - wantZ0) < 1e-9 && Math.abs(m.z1 - layered.bands[i].z1) < 1e-9,
+    `band ${i} z-range ${m.z0.toFixed(2)}-${m.z1.toFixed(2)} mm`
+  );
+}
+
+const lpos = meshPartPositions(layered);
+const lzs = lpos.flatMap((pt) => pt.positions.filter((_, i) => i % 3 === 2));
+check(
+  lzs.every((z) => z >= 0 && z <= 5 + 1e-6),
+  "layered mesh z within [0, 5]"
+);
+check(
+  lpos.every((pt) => pt.positions.length > 0),
+  "all 4 layered parts non-empty"
+);
+
+console.log("mosaic mode (via pipeline):");
+const mosaic = processImageData(fakeImageData, palette, 40, 5, "mosaic");
+check(
+  mosaic.meshes.every((m) => m.z0 === 0 && m.z1 === 5),
+  "mosaic bands all span 0-5 mm"
+);
+const mosaicAreas = mosaic.meshes.map(
+  (m) => m.boxes.reduce((sum, b) => sum + b.w * b.h, 0) / mosaic.pixelSizeMm ** 2
+);
+check(
+  mosaicAreas.join(",") === "16,15,16,16",
+  `mosaic per-color coverage 16,15,16,16 (got ${mosaicAreas.join(",")})`
+);
+
 console.log("3MF:");
 async function main() {
   const blob = await build3MF(parts);
@@ -159,6 +216,14 @@ async function main() {
   check(/displaycolor="#[0-9A-F]{8}"/.test(model), "3MF colors are #RRGGBBAA");
   const triCount = (model.match(/<triangle /g) || []).length;
   check(triCount === 5 * 12, `3MF triangle count = ${triCount} (expect 60)`);
+
+  const layeredBlob = await build3MF(meshPartPositions(layered));
+  const lzip = await JSZip.loadAsync(await layeredBlob.arrayBuffer());
+  const lmodel = await lzip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (lmodel.match(/<object /g) || []).length === 4,
+    "layered 3MF has 4 objects"
+  );
 
   console.log("STL zip:");
   const zipBlob = await buildSTLZip(parts);

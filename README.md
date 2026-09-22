@@ -26,8 +26,21 @@ Everything runs **client-side in the browser**: no server, no uploads.
    - **STL zip** — one binary STL per color, all sharing the same origin, for
      slicers that prefer separate STLs.
 
-The model is a flat mosaic: each color region is a solid prism the full
-plate thickness, sitting side by side in the XY plane.
+## Print modes
+
+**Mosaic (flat, uniform thickness)** — each color region is a solid prism the
+full plate thickness, side by side in the XY plane. Classic 4-filament
+multi-material print (AMS/MMU).
+
+**Layered (HueForge-style relief)** — the 4 filaments are stacked in Z:
+Filament 1 (darkest) at the bottom, Filament 4 at the top. Each pixel's
+column stops at the top of its own color's band, so the visible top face of
+every pixel is printed in its assigned color and the plate becomes a
+variable-height relief. Band boundaries snap to whole multiples of the
+chosen print layer height, and the app shows you exactly where to swap
+filaments ("swap at z = 1.2, 2.6, 3.8 mm · layers 7, 13, 20"), mirroring
+HueForge's swap instructions. Slice with the same layer height you selected
+in the app.
 
 ## Run it
 
@@ -59,6 +72,7 @@ app/               Next.js app router page, layout, styles
 components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D
 lib/quantize.ts    median cut + farthest-point seeded k-means, pixel mapping
 lib/mesh.ts        pixel grid → merged rects → extruded box triangles
+                   (arbitrary z0..z1 bands for layered mode)
 lib/exporters.ts   binary STL writer, multi-part 3MF (JSZip) writer
 lib/pipeline.ts    downscale + orchestration glue
 scripts/           core-logic test
@@ -70,3 +84,9 @@ scripts/           core-logic test
   lower the resolution or increase the plate width.
 - 5 mm at 0.2 mm layer height = 25 layers; every color prints on every
   layer, so expect plenty of filament swaps — that's normal for a mosaic.
+- In layered mode there are only 3 filament swaps total (at the band
+  boundaries), but note the plate height varies per pixel — darkest color
+  regions are the thinnest.
+- For truer HueForge color blending, pick filaments by their Transmission
+  Distance (TD) and order the stack dark → light (the auto-detected palette
+  is already sorted that way).

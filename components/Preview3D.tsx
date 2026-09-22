@@ -118,7 +118,7 @@ export default function Preview3D({
       geo.setAttribute(
         "position",
         new THREE.BufferAttribute(
-          new Float32Array(meshPositions(part.boxes, processed.depthMm)),
+          new Float32Array(meshPositions(part.boxes, part.z0, part.z1)),
           3
         )
       );

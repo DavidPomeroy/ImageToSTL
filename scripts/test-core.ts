@@ -248,6 +248,79 @@ check(
   `backlit preview: white pixel brighter than black (${prev[0]} vs ${prev[4]})`
 );
 
+console.log("smoothed surface mode:");
+function signedVolume(positions: number[]): number {
+  let v = 0;
+  for (let t = 0; t + 8 < positions.length; t += 9) {
+    const ax = positions[t],
+      ay = positions[t + 1],
+      az = positions[t + 2];
+    const bx = positions[t + 3],
+      by = positions[t + 4],
+      bz = positions[t + 5];
+    const cx = positions[t + 6],
+      cy = positions[t + 7],
+      cz = positions[t + 8];
+    v +=
+      (ax * (by * cz - bz * cy) -
+        ay * (bx * cz - bz * cx) +
+        az * (bx * cy - by * cx)) /
+      6;
+  }
+  return v;
+}
+
+const lithoSmooth = processImageData(
+  gImage,
+  [],
+  80,
+  4,
+  "lithophane",
+  0.2,
+  0.8,
+  undefined,
+  true
+);
+{
+  const lp = lithoSmooth.meshes[0].positions;
+  check(lp.length > 0 && lp.length % 9 === 0, "smooth lithophane positions valid");
+  const bad = countNonManifoldEdges(lp);
+  check(bad === 0, `smooth lithophane manifold (${bad} bad edges)`);
+  const zs = lp.filter((_, i) => i % 3 === 2);
+  check(
+    zs.every((z) => z >= -1e-6 && z <= 4 + 1e-4),
+    "smooth lithophane z within [0, 4]"
+  );
+  // interpolated surface volume should be close to the stepped column volume
+  let columnVol = 0;
+  for (let i = 0; i < lhGrid.length; i++) columnVol += lhGrid[i] * 25;
+  const v = signedVolume(lp);
+  check(
+    Math.abs(v - columnVol) < 0.12 * columnVol,
+    `smooth lithophane volume sane (${v.toFixed(0)} vs stepped ${columnVol.toFixed(0)})`
+  );
+}
+
+const cmykSmooth = processImageData(
+  cmykImage,
+  [],
+  50,
+  5,
+  "cmyk",
+  0.2,
+  0.8,
+  cmykOpts,
+  true
+);
+check(
+  cmykSmooth.meshes.length === 4,
+  "smooth CMYK produces 4 parts"
+);
+for (const m of cmykSmooth.meshes) {
+  const bad = countNonManifoldEdges(m.positions);
+  check(bad === 0, `smooth CMYK ${m.name}: manifold (${bad} bad edges)`);
+}
+
 console.log("exports:");
 async function main() {
   // 3MF from the mosaic parts

@@ -26,7 +26,10 @@ import {
   rgbToHex,
   type RGB,
 } from "./quantize";
-import { buildHeightfieldGeometry } from "./mesh";
+import {
+  buildHeightfieldGeometry,
+  buildSmoothHeightfieldGeometry,
+} from "./mesh";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
 
@@ -244,7 +247,8 @@ export function processImageData(
   mode: PrintMode = "mosaic",
   layerHeight = 0.2,
   minThickness = 0.8,
-  cmyk?: CmykOptions
+  cmyk?: CmykOptions,
+  smooth = false
 ): ProcessedImage {
   const gw = imageData.width;
   const gh = imageData.height;
@@ -304,7 +308,9 @@ export function processImageData(
         pixelCount: count,
         z0: 0,
         z1: maxZ,
-        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
+        positions: smooth
+          ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
+          : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
       });
     }
 
@@ -343,7 +349,9 @@ export function processImageData(
       pixelCount: opaque,
       z0: 0,
       z1: maxMm,
-      positions: buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
+      positions: smooth
+        ? buildSmoothHeightfieldGeometry(z0s, heights, gw, gh, pixelSize)
+        : buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
     };
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `heights`

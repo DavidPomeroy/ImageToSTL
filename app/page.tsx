@@ -60,6 +60,7 @@ export default function Home() {
   const [whiteMaxLayers, setWhiteMaxLayers] = useState(16);
   const [palette, setPalette] = useState<RGB[]>([]);
   const [fitNonce, setFitNonce] = useState(0);
+  const [smooth, setSmooth] = useState(false);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
 
   const debouncedResolution = useDebouncedValue(resolution, 150);
@@ -103,9 +104,10 @@ export default function Home() {
             colorLayers,
             whiteMinLayers,
             whiteMaxLayers,
-          })
+          },
+          smooth)
         : null,
-    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers]
+    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth]
   );
 
   const exportParts = useMemo(
@@ -196,6 +198,7 @@ export default function Home() {
                 colorLayers={colorLayers}
                 whiteMinLayers={whiteMinLayers}
                 whiteMaxLayers={whiteMaxLayers}
+                smooth={smooth}
                 onMode={setMode}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
@@ -205,6 +208,7 @@ export default function Home() {
                 onColorLayers={setColorLayers}
                 onWhiteMinLayers={setWhiteMinLayers}
                 onWhiteMaxLayers={setWhiteMaxLayers}
+                onSmooth={setSmooth}
               />
               {processed && processed.pixelSizeMm < 0.4 && (
                 <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">

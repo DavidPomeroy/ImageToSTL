@@ -63,6 +63,7 @@ export default function Controls(props: {
   colorLayers: number;
   whiteMinLayers: number;
   whiteMaxLayers: number;
+  smooth: boolean;
   onMode: (m: PrintMode) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
@@ -72,6 +73,7 @@ export default function Controls(props: {
   onColorLayers: (v: number) => void;
   onWhiteMinLayers: (v: number) => void;
   onWhiteMaxLayers: (v: number) => void;
+  onSmooth: (v: boolean) => void;
 }) {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
@@ -101,6 +103,34 @@ export default function Controls(props: {
           {DESCRIPTIONS[props.mode]}
         </p>
       </div>
+
+      {(litho || cmyk) && (
+        <div>
+          <div className="mb-1 text-sm text-zinc-300">Surface</div>
+          <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+            {(
+              [
+                [false, "Pixelated", "blocky steps"],
+                [true, "Smoothed", "interpolated relief"],
+              ] as const
+            ).map(([v, label, hint]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => props.onSmooth(v)}
+                className={`rounded-md border px-2 py-2 text-center transition-colors ${
+                  props.smooth === v
+                    ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+                    : "border-transparent text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                <div className="text-sm font-medium">{label}</div>
+                <div className="text-[10px] leading-tight opacity-70">{hint}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Slider
         label="Resolution (longest side)"

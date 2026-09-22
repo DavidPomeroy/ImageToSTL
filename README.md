@@ -47,7 +47,10 @@ filaments ("swap at z = 1.2, 2.6, 3.8 mm · layers 7, 13, 20"), mirroring
 HueForge's swap instructions. Slice with the same layer height you selected
 in the app.
 
-**Lithophane (backlit, single filament)** — thickness encodes brightness:
+**Lithophane (backlit, single filament)** — thickness encodes brightness
+(each mode below has a *Surface: Pixelated / Smoothed* toggle — smoothed
+bilinearly interpolates relief heights between pixel centers, giving
+commercial-lithophane-style surfaces instead of blocky steps):
 dark pixels print thick, bright pixels thin (adjustable min/max, e.g.
 0.8–5 mm). Every thickness step snaps to a whole print layer. Export is a
 single part (3MF or STL). Print flat with the relief side up in white or

@@ -2,7 +2,8 @@
 
 A small Next.js web app that turns any uploaded image into a **3D-printable
 plate** (default **5 mm thick**) — as a flat 4-color multi-material mosaic,
-a HueForge-style layered relief, or a single-filament lithophane.
+a HueForge-style layered relief, a single-filament lithophane, or a
+full-color **CMYK lithophane** (Cyan / Magenta / Yellow / White filaments).
 
 Everything runs **client-side in the browser**: no server, no uploads.
 
@@ -49,6 +50,16 @@ dark pixels print thick, bright pixels thin (adjustable min/max, e.g.
 0.8–5 mm). Every thickness step snaps to a whole print layer. Export is a
 single part (3MF or STL). Print flat with the relief side up in white or
 natural PLA, high infill, then hold it in front of a light.
+
+**CMYK lithophane (backlit color, 4 filaments)** — thin Cyan / Magenta /
+Yellow layers at the bottom mix subtractively to form each pixel's color
+(more of a channel = more of its complement absorbed), and a white
+lithophane relief on top controls brightness. Everything snaps to whole
+print layers: set your slicer layer height, tune "layers per color channel"
+(color strength) and the white min/max (brightness range). Exports as 4
+parts in print order — Cyan (bottom), Magenta, Yellow, White (top) — in one
+3MF, or as 4 STLs. Assign each part its filament in the slicer; an AMS/MMU
+handles the swaps automatically.
 
 ## Run it
 
@@ -101,3 +112,7 @@ scripts/           core-logic test
 - Lithophanes: white/natural PLA works best; more perimeters or 100% infill
   gives the most even light diffusion. Higher pixel resolution = finer
   detail (and bigger files).
+- CMYK lithophanes: use translucent C/M/Y filaments and a plain white for
+  the relief. More color layers per channel = stronger color but a taller,
+  slower print. Colors will be less saturated than on screen — that's the
+  physics of subtractive filament mixing.

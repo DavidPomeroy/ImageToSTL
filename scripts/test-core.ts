@@ -14,7 +14,11 @@ import {
 } from "../lib/quantize";
 import { buildRectsForColor, meshPositions, rectsToBoxes } from "../lib/mesh";
 import { build3MF, buildSTL, buildSTLZip } from "../lib/exporters";
-import { meshPartPositions, processImageData } from "../lib/pipeline";
+import {
+  computeCmykStacks,
+  meshPartPositions,
+  processImageData,
+} from "../lib/pipeline";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -254,6 +258,75 @@ check(
   "lithophane z within [0, 4]"
 );
 
+console.log("CMYK lithophane mode:");
+const cmykData = new Uint8ClampedArray(5 * 1 * 4);
+const setPx = (i: number, r: number, g: number, b: number, a = 255) => {
+  cmykData[i * 4] = r;
+  cmykData[i * 4 + 1] = g;
+  cmykData[i * 4 + 2] = b;
+  cmykData[i * 4 + 3] = a;
+};
+setPx(0, 255, 255, 255); // white
+setPx(1, 0, 0, 0); // black
+setPx(2, 255, 0, 0); // red
+setPx(3, 128, 128, 128); // gray
+setPx(4, 200, 40, 200, 0); // transparent
+const cmykImage = { data: cmykData, width: 5, height: 1 } as unknown as ImageData;
+const cmykOpts = { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 };
+const stacks = computeCmykStacks(cmykImage, cmykOpts);
+
+check(
+  stacks.c[0] === 0 && stacks.m[0] === 0 && stacks.y[0] === 0 && stacks.w[0] === 2,
+  "white pixel: no color layers, min white"
+);
+check(
+  stacks.c[1] === 4 && stacks.m[1] === 4 && stacks.y[1] === 4 && stacks.w[1] === 10,
+  "black pixel: max color layers, max white"
+);
+check(
+  stacks.c[2] === 0 && stacks.m[2] === 4 && stacks.y[2] === 4,
+  "red pixel: magenta + yellow only"
+);
+check(
+  stacks.c[3] === 2 && stacks.m[3] === 2 && stacks.y[3] === 2,
+  "gray pixel: equal mid color layers"
+);
+check(
+  stacks.w[4] === 0 && stacks.c[4] + stacks.m[4] + stacks.y[4] === 0,
+  "transparent pixel: no geometry"
+);
+
+const cmykProc = processImageData(cmykImage, [], 50, 5, "cmyk", 0.2, 0.8, cmykOpts);
+check(cmykProc.meshes.length === 4, "CMYK produces 4 parts");
+check(
+  /Cyan/.test(cmykProc.meshes[0].name) && /White/.test(cmykProc.meshes[3].name),
+  "part order is C, M, Y, White"
+);
+check(
+  Math.abs(cmykProc.depthMm - 4.4) < 1e-4,
+  `max height = 4.4 mm (got ${cmykProc.depthMm.toFixed(2)})`
+);
+check(
+  cmykProc.meshes[0].pixelCount === 2,
+  `cyan part covers black+gray = 2 pixels (got ${cmykProc.meshes[0].pixelCount})`
+);
+check(
+  cmykProc.meshes[3].pixelCount === 4,
+  `white part covers all 4 opaque pixels (got ${cmykProc.meshes[3].pixelCount})`
+);
+const prev = cmykProc.cmykPreview!;
+check(
+  prev[0] > prev[4],
+  `backlit preview: white pixel brighter than black (${prev[0]} vs ${prev[4]})`
+);
+check(prev[19] === 0, "transparent pixel has alpha 0 in preview");
+const cmykPos = meshPartPositions(cmykProc);
+const cmykZs = cmykPos.flatMap((pt) => pt.positions.filter((_, i) => i % 3 === 2));
+check(
+  cmykZs.every((z) => z >= -1e-9 && z <= 4.4 + 1e-4),
+  "CMYK z within [0, 4.4]"
+);
+
 console.log("3MF:");
 async function main() {
   const blob = await build3MF(parts);
@@ -294,6 +367,18 @@ async function main() {
   check(
     lithoStl.byteLength === 84 + (lithoPositions.length / 9) * 50,
     "lithophane STL size matches triangle count"
+  );
+
+  const cmykBlob = await build3MF(meshPartPositions(cmykProc));
+  const cmykZip = await JSZip.loadAsync(await cmykBlob.arrayBuffer());
+  const cmykModel = await cmykZip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (cmykModel.match(/<object /g) || []).length === 4,
+    "CMYK 3MF has 4 objects"
+  );
+  check(
+    /Cyan/.test(cmykModel) && /Magenta/.test(cmykModel) && /Yellow/.test(cmykModel) && /White/.test(cmykModel),
+    "CMYK 3MF part names present"
   );
 
   console.log("STL zip:");

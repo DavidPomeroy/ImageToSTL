@@ -11,6 +11,7 @@ export default function Preview2D({
   heights,
   hMin,
   hMax,
+  cmykPreview,
 }: {
   grid: Uint8Array;
   gw: number;
@@ -20,6 +21,8 @@ export default function Preview2D({
   heights?: Float32Array;
   hMin?: number;
   hMax?: number;
+  /** CMYK lithophane: simulated backlit RGBA, drawn directly. */
+  cmykPreview?: Uint8ClampedArray;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -32,7 +35,9 @@ export default function Preview2D({
     if (!ctx) return;
     const img = ctx.createImageData(gw, gh);
 
-    if (heights) {
+    if (cmykPreview) {
+      img.data.set(cmykPreview);
+    } else if (heights) {
       // approximate backlit appearance: thinner areas glow brighter
       const lo = hMin ?? 0;
       const range = Math.max(1e-6, (hMax ?? 1) - lo);
@@ -60,7 +65,7 @@ export default function Preview2D({
       }
     }
     ctx.putImageData(img, 0, 0);
-  }, [grid, gw, gh, palette, heights, hMin, hMax]);
+  }, [grid, gw, gh, palette, heights, hMin, hMax, cmykPreview]);
 
   return (
     <canvas

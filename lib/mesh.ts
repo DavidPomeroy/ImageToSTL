@@ -180,3 +180,43 @@ export function buildLithophaneGeometry(
   }
   return { positions, boxCount };
 }
+
+/**
+ * Stacked geometry: each pixel has its own z0/z1 range (used for CMYK
+ * lithophane parts, where a color band's base height varies per pixel).
+ * Pixels sharing a (z0, z1) range are merged into rects.
+ */
+export function buildStackedGeometry(
+  z0s: Float32Array,
+  z1s: Float32Array,
+  gw: number,
+  gh: number,
+  pixelSize: number
+): { positions: number[]; boxCount: number } {
+  const byRange = new Map<string, { z0: number; z1: number; pixels: number[] }>();
+  for (let i = 0; i < z1s.length; i++) {
+    const z0 = z0s[i];
+    const z1 = z1s[i];
+    if (!(z1 > z0)) continue; // zero-height or empty pixel: no geometry
+    const key = Math.round(z0 * 1000) + ":" + Math.round(z1 * 1000);
+    let e = byRange.get(key);
+    if (!e) {
+      e = { z0, z1, pixels: [] };
+      byRange.set(key, e);
+    }
+    e.pixels.push(i);
+  }
+
+  const positions: number[] = [];
+  let boxCount = 0;
+  const mask = new Uint8Array(gw * gh);
+  for (const e of byRange.values()) {
+    mask.fill(0);
+    for (const p of e.pixels) mask[p] = 1;
+    const rects = buildRects(mask, gw, gh, (v) => v === 1);
+    const boxes = rectsToBoxes(rects, gh, pixelSize);
+    boxCount += boxes.length;
+    for (const b of boxes) pushBoxTriangles(positions, b, e.z0, e.z1);
+  }
+  return { positions, boxCount };
+}

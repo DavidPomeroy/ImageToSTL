@@ -39,6 +39,7 @@ const MODES = [
   ["mosaic", "Mosaic", "flat · 4 filaments"],
   ["layered", "Layered", "HueForge relief"],
   ["lithophane", "Lithophane", "backlit · 1 filament"],
+  ["cmyk", "CMYK", "color litho · 4 filaments"],
 ] as const;
 
 const DESCRIPTIONS: Record<PrintMode, string> = {
@@ -48,6 +49,8 @@ const DESCRIPTIONS: Record<PrintMode, string> = {
     "Layered: filaments are stacked bottom → top (Filament 1 at the base). Each pixel's column stops at the top of its color's band — a HueForge-style variable-height relief.",
   lithophane:
     "Lithophane: a single-filament panel where thickness encodes brightness — dark areas print thick, bright areas thin. Backlight the finished print and the image appears.",
+  cmyk:
+    "CMYK lithophane: thin Cyan / Magenta / Yellow layers mix subtractively for color, and a white relief on top controls brightness. Backlight it to see a full-color image. Needs 4 filaments (AMS/MMU).",
 };
 
 export default function Controls(props: {
@@ -57,20 +60,27 @@ export default function Controls(props: {
   depthMm: number;
   layerHeight: number;
   minThickness: number;
+  colorLayers: number;
+  whiteMinLayers: number;
+  whiteMaxLayers: number;
   onMode: (m: PrintMode) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
   onDepthMm: (v: number) => void;
   onLayerHeight: (v: number) => void;
   onMinThickness: (v: number) => void;
+  onColorLayers: (v: number) => void;
+  onWhiteMinLayers: (v: number) => void;
+  onWhiteMaxLayers: (v: number) => void;
 }) {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
+  const cmyk = props.mode === "cmyk";
   return (
     <div className="space-y-4">
       <div>
         <div className="mb-1 text-sm text-zinc-300">Print mode</div>
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
           {MODES.map(([m, label, hint]) => (
             <button
               key={m}
@@ -110,6 +120,7 @@ export default function Controls(props: {
         unit=" mm"
         onChange={props.onWidthMm}
       />
+
       {litho && (
         <Slider
           label="Min thickness (bright areas)"
@@ -121,22 +132,57 @@ export default function Controls(props: {
           onChange={props.onMinThickness}
         />
       )}
-      <Slider
-        label={
-          litho
-            ? "Max thickness (dark areas)"
-            : layered
-              ? "Total height (max)"
-              : "Thickness (Z depth)"
-        }
-        value={props.depthMm}
-        min={2}
-        max={12}
-        step={0.5}
-        unit=" mm"
-        onChange={props.onDepthMm}
-      />
-      {(layered || litho) && (
+      {!cmyk && (
+        <Slider
+          label={
+            litho
+              ? "Max thickness (dark areas)"
+              : layered
+                ? "Total height (max)"
+                : "Thickness (Z depth)"
+          }
+          value={props.depthMm}
+          min={2}
+          max={12}
+          step={0.5}
+          unit=" mm"
+          onChange={props.onDepthMm}
+        />
+      )}
+
+      {cmyk && (
+        <>
+          <Slider
+            label="Layers per color channel (max)"
+            value={props.colorLayers}
+            min={1}
+            max={8}
+            step={1}
+            unit=""
+            onChange={props.onColorLayers}
+          />
+          <Slider
+            label="White layers (min)"
+            value={props.whiteMinLayers}
+            min={1}
+            max={6}
+            step={1}
+            unit=""
+            onChange={props.onWhiteMinLayers}
+          />
+          <Slider
+            label="White layers (max)"
+            value={props.whiteMaxLayers}
+            min={4}
+            max={30}
+            step={1}
+            unit=""
+            onChange={props.onWhiteMaxLayers}
+          />
+        </>
+      )}
+
+      {(layered || litho || cmyk) && (
         <>
           <Slider
             label="Print layer height"
@@ -148,9 +194,11 @@ export default function Controls(props: {
             onChange={props.onLayerHeight}
           />
           <p className="text-xs leading-relaxed text-zinc-500">
-            {litho
-              ? "Thickness steps snap to whole print layers — slice with this layer height for clean level changes."
-              : "Band boundaries snap to whole print layers — slice with the same layer height you set here."}
+            {cmyk
+              ? "All color and white steps are whole print layers — slice with this layer height."
+              : litho
+                ? "Thickness steps snap to whole print layers — slice with this layer height for clean level changes."
+                : "Band boundaries snap to whole print layers — slice with the same layer height you set here."}
           </p>
         </>
       )}

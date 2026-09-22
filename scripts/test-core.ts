@@ -515,6 +515,41 @@ check(
   `full-cylinder outer diameter (${cylinder.bboxMm.x.toFixed(1)})`
 );
 
+// regression: curved multi-part plates must share ONE bed translation —
+// per-part translation pulled stacked bands out of radial alignment
+{
+  const cl = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "layered",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    undefined,
+    90
+  );
+  const minZ = (m: { positions: number[] }): number => {
+    let z = Infinity;
+    for (let i = 2; i < m.positions.length; i += 3) z = Math.min(z, m.positions[i]);
+    return z;
+  };
+  check(
+    Math.abs(minZ(cl.meshes[0])) < 1e-6,
+    "curved layered: bottom band rests on the bed"
+  );
+  check(
+    Math.abs(minZ(cl.meshes[1]) - 1.2 * Math.SQRT1_2) < 0.01,
+    `curved layered: band 2 keeps its radial position (${minZ(cl.meshes[1]).toFixed(3)}, expect ~0.849)`
+  );
+  for (const m of cl.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `curved layered ${m.name}: manifold (${bad} bad edges)`);
+  }
+}
+
 console.log("exports:");
 async function main() {
   // 3MF from the mosaic parts

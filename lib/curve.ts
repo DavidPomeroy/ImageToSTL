@@ -21,13 +21,19 @@ export function curveRadius(widthMm: number, curveDeg: number): number {
   return widthMm / theta;
 }
 
-/** Bend all vertex positions of a flat-plate mesh in place. */
-export function applyCurve(
+/**
+ * Bend all vertex positions of a flat-plate mesh in place — WITHOUT any
+ * bed translation. Returns the bent mesh's minimum Z (0 if not bent).
+ * Multi-part plates must bend every part first and translate all of them by
+ * the same GLOBAL min Z afterwards; translating per part would pull stacked
+ * bands out of radial alignment.
+ */
+export function bendPositions(
   positions: number[],
   widthMm: number,
   curveDeg: number
-): void {
-  if (curveDeg < 0.01 || positions.length < 9) return;
+): number {
+  if (curveDeg < 0.01 || positions.length < 9) return 0;
   const theta = (Math.min(curveDeg, 359.5) * Math.PI) / 180;
   const R = widthMm / theta;
   const half = widthMm / 2;
@@ -42,9 +48,24 @@ export function applyCurve(
     positions[i + 2] = rad * Math.cos(phi) - R;
     if (positions[i + 2] < minZ) minZ = positions[i + 2];
   }
-  if (!isFinite(minZ)) return;
-  // rest the solid on the bed (min Z = 0)
-  if (minZ < 0) {
-    for (let i = 2; i < positions.length; i += 3) positions[i] -= minZ;
-  }
+  return isFinite(minZ) ? minZ : 0;
+}
+
+/** Shift all vertices of a mesh by dz (used for the shared bed placement). */
+export function shiftZ(positions: number[], dz: number): void {
+  if (dz === 0) return;
+  for (let i = 2; i < positions.length; i += 3) positions[i] += dz;
+}
+
+/**
+ * Convenience for single-mesh plates: bend and rest the solid on the bed.
+ * Do NOT use for stacked multi-part plates — see bendPositions.
+ */
+export function applyCurve(
+  positions: number[],
+  widthMm: number,
+  curveDeg: number
+): void {
+  const minZ = bendPositions(positions, widthMm, curveDeg);
+  if (minZ < 0) shiftZ(positions, -minZ);
 }

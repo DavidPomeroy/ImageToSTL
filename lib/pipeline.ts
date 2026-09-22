@@ -31,7 +31,7 @@ import {
   buildSmoothHeightfieldGeometry,
 } from "./mesh";
 import { classifyPixels, type ShapeParams } from "./shapes";
-import { applyCurve } from "./curve";
+import { bendPositions, shiftZ } from "./curve";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
 
@@ -398,7 +398,11 @@ export function processImageData(
     }
 
     if (curveDeg > 0.01) {
-      for (const m of meshes) applyCurve(m.positions, widthMm, curveDeg);
+      let minZ = Infinity;
+      for (const m of meshes) {
+        minZ = Math.min(minZ, bendPositions(m.positions, widthMm, curveDeg));
+      }
+      if (minZ < 0) for (const m of meshes) shiftZ(m.positions, -minZ);
     }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `cmykPreview`
@@ -448,7 +452,8 @@ export function processImageData(
         : buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
     };
     if (curveDeg > 0.01) {
-      applyCurve(mesh.positions, widthMm, curveDeg);
+      const minZ = bendPositions(mesh.positions, widthMm, curveDeg);
+      if (minZ < 0) shiftZ(mesh.positions, -minZ);
     }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `heights`
@@ -577,7 +582,11 @@ export function processImageData(
     meshes.reduce((sum, m) => sum + m.positions.length, 0) / 9;
 
   if (curveDeg > 0.01) {
-    for (const m of meshes) applyCurve(m.positions, widthMm, curveDeg);
+    let minZ = Infinity;
+    for (const m of meshes) {
+      minZ = Math.min(minZ, bendPositions(m.positions, widthMm, curveDeg));
+    }
+    if (minZ < 0) for (const m of meshes) shiftZ(m.positions, -minZ);
   }
   return {
     grid,

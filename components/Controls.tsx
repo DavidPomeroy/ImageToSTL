@@ -106,7 +106,7 @@ export default function Controls(props: {
         label="Resolution (longest side)"
         value={props.resolution}
         min={32}
-        max={256}
+        max={512}
         step={8}
         unit=" px"
         onChange={props.onResolution}

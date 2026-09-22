@@ -48,6 +48,7 @@ function saveBlob(blob: Blob, name: string) {
 export default function Home() {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageName, setImageName] = useState("image");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<PrintMode>("mosaic");
   const [resolution, setResolution] = useState(120);
   const [widthMm, setWidthMm] = useState(100);
@@ -67,9 +68,12 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      URL.revokeObjectURL(url);
       setImage(img);
       setImageName(file.name.replace(/\.[^.]+$/, "") || "image");
+      setImageUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
       setFitNonce((n) => n + 1);
     };
     img.onerror = () => URL.revokeObjectURL(url);
@@ -316,7 +320,20 @@ export default function Home() {
               </div>
             ) : (
               <>
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+                    <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
+                      Original · {image?.naturalWidth}×{image?.naturalHeight} px
+                    </h3>
+                    {imageUrl && (
+                      <img
+                        src={imageUrl}
+                        alt="Original upload"
+                        className="w-full rounded-lg border border-zinc-800 [background:repeating-conic-gradient(#27272a_0%_25%,#18181b_0%_50%)] [background-size:16px_16px]"
+                      />
+                    )}
+                  </div>
+
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                     <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
                       {processed.mode === "lithophane" || processed.mode === "cmyk" ? "Backlit preview" : "Quantized image"} · {processed.gw}×{processed.gh} px
@@ -390,8 +407,9 @@ export default function Home() {
                       </div>
                     </dl>
                   </div>
+                </div>
 
-                  <div className="relative h-[440px] overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/60 to-zinc-950">
+                <div className="relative h-[500px] overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/60 to-zinc-950">
                     <Preview3D processed={processed} fitNonce={fitNonce} />
                     <button
                       type="button"
@@ -404,7 +422,6 @@ export default function Home() {
                       Drag to orbit · scroll to zoom
                     </span>
                   </div>
-                </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                   <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-400">

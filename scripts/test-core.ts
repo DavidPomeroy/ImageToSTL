@@ -352,6 +352,44 @@ async function main() {
   );
   check(model.includes('unit="millimeter"'), "3MF units are millimetres");
   check(/<m:color color="#[0-9A-F]{8}"/.test(model), "3MF colors are #RRGGBBAA");
+
+  // Bambu Studio metadata: extruder mapping + filament colors
+  check(
+    names.includes("Metadata/model_settings.config"),
+    "3MF contains Metadata/model_settings.config"
+  );
+  check(
+    names.includes("Metadata/project_settings.config"),
+    "3MF contains Metadata/project_settings.config"
+  );
+  const ms = await zip.file("Metadata/model_settings.config")!.async("string");
+  check((ms.match(/<object /g) || []).length === 4, "model_settings has 4 objects");
+  for (let e = 1; e <= 4; e++) {
+    check(
+      ms.includes(`key="extruder" value="${e}"`),
+      `model_settings assigns extruder ${e}`
+    );
+  }
+  check(
+    (ms.match(/<part /g) || []).length === 4,
+    "model_settings has 4 parts with matching ids"
+  );
+  const ps = JSON.parse(
+    await zip.file("Metadata/project_settings.config")!.async("string")
+  );
+  check(
+    Array.isArray(ps.filament_colour) && ps.filament_colour.length === 4,
+    "project settings: 4 filament colours"
+  );
+  check(
+    ps.filament_colour.every((c: string) => /^#[0-9A-F]{6}$/.test(c)),
+    "filament colours are #RRGGBB"
+  );
+  check(
+    Array.isArray(ps.filament_type) &&
+      ps.filament_type.every((t: string) => t === "PLA"),
+    "filament types default to PLA"
+  );
   const triCount = (model.match(/<triangle /g) || []).length;
   check(triCount === 5 * 12, `3MF triangle count = ${triCount} (expect 60)`);
 

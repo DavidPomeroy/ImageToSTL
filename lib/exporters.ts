@@ -173,6 +173,54 @@ ${items}
 </model>`;
 }
 
+/**
+ * Bambu-Studio-style Metadata/model_settings.config: assigns each object
+ * (and its single part) an extruder, 1-based, in part order.
+ */
+export function buildModelSettingsXml(parts: ExportPart[]): string {
+  const objects = parts
+    .map((p, i) => {
+      const id = i + 2;
+      const extruder = i + 1;
+      const name = escapeXml(p.name);
+      return `  <object id="${id}">
+    <metadata key="name" value="${name}"/>
+    <metadata key="extruder" value="${extruder}"/>
+    <part id="${id}" subtype="normal_part">
+      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>
+      <metadata key="name" value="${name}"/>
+      <metadata key="extruder" value="${extruder}"/>
+    </part>
+  </object>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+${objects}
+</config>
+`;
+}
+
+/**
+ * Minimal Bambu-Studio-style Metadata/project_settings.config: just the
+ * filament colors/types, so the filament section is pre-populated when the
+ * file is opened as a project. Unknown/absent keys safely fall back to
+ * defaults on load.
+ */
+export function buildProjectSettingsJson(parts: ExportPart[]): string {
+  return JSON.stringify(
+    {
+      name: "project_settings",
+      from: "project",
+      version: "2.0.0.0",
+      filament_colour: parts.map((p) => rgbToHex(p.color).toUpperCase()),
+      filament_type: parts.map(() => "PLA"),
+    },
+    null,
+    4
+  );
+}
+
 export async function build3MF(parts: ExportPart[]): Promise<Blob> {
   const usable = parts.filter((p) => p.positions.length > 0);
   if (usable.length === 0) throw new Error("Nothing to export");
@@ -180,6 +228,10 @@ export async function build3MF(parts: ExportPart[]): Promise<Blob> {
   zip.file("[Content_Types].xml", CONTENT_TYPES_XML);
   zip.folder("_rels")!.file(".rels", RELS_XML);
   zip.folder("3D")!.file("3dmodel.model", build3MFModelXml(usable));
+  // Bambu Studio metadata: extruder assignment per part + filament colors.
+  // Ignored by other slicers; non-fatal in Bambu if anything is off.
+  zip.folder("Metadata")!.file("model_settings.config", buildModelSettingsXml(usable));
+  zip.folder("Metadata")!.file("project_settings.config", buildProjectSettingsJson(usable));
   return zip.generateAsync({
     type: "blob",
     mimeType: "model/3mf",

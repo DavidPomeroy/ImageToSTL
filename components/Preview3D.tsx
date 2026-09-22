@@ -4,7 +4,6 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { ProcessedImage } from "@/lib/pipeline";
-import { meshPositions } from "@/lib/mesh";
 import { rgbToHex } from "@/lib/quantize";
 
 interface SceneCtx {
@@ -113,13 +112,12 @@ export default function Preview3D({
     disposeGroup(group);
 
     for (const part of processed.meshes) {
-      if (part.boxes.length === 0 && !(part.positions && part.positions.length > 0))
-        continue;
+      if (!part.positions || part.positions.length === 0) continue;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute(
         "position",
         new THREE.BufferAttribute(
-          new Float32Array(part.positions ?? meshPositions(part.boxes, part.z0, part.z1)),
+          new Float32Array(part.positions),
           3
         )
       );

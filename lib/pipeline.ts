@@ -1,8 +1,12 @@
 // Glue between image data, quantization and mesh generation.
 //
-// Three print modes:
-//  - "mosaic":     every color region is a solid prism from z=0 to z=depth,
-//                  side by side in XY (flat, uniform thickness).
+// All meshes are built as per-pixel heightfields (lib/mesh.ts), which emit
+// only boundary faces — manifold geometry, no non-manifold edges from
+// coincident internal box faces.
+//
+// Print modes:
+//  - "mosaic":     every color region is solid from z=0 to z=depth, side by
+//                  side in XY (flat, uniform thickness).
 //  - "layered":    HueForge-style stack. Palette index 0 is the bottom
 //                  filament. Color k covers the Z band [bands[k].z0,
 //                  bands[k].z1] for every pixel whose palette index is >= k,
@@ -11,6 +15,9 @@
 //  - "lithophane": single filament. Each pixel's thickness encodes its
 //                  brightness (dark = thick, bright = thin), snapped to whole
 //                  print layers. Backlit, the image appears.
+//  - "cmyk":       CMYK lithophane. Thin C/M/Y layers at the bottom mix
+//                  subtractively for color; a white relief on top controls
+//                  brightness. Four stacked parts.
 
 import {
   EMPTY,
@@ -19,15 +26,7 @@ import {
   rgbToHex,
   type RGB,
 } from "./quantize";
-import {
-  buildLithophaneGeometry,
-  buildStackedGeometry,
-  buildRects,
-  buildRectsForColor,
-  meshPositions,
-  rectsToBoxes,
-  type Box,
-} from "./mesh";
+import { buildHeightfieldGeometry } from "./mesh";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
 
@@ -42,14 +41,12 @@ export interface BandInfo {
 export interface ColorMeshData {
   color: RGB;
   name: string;
-  boxes: Box[];
+  /** Pixels covered by this part (layered: band coverage, i.e. >= this color). */
   pixelCount: number;
   z0: number;
   z1: number;
-  /** Precomputed triangle soup (lithophane: per-pixel heights). */
-  positions?: number[];
-  /** Region count when it differs from boxes.length (precomputed geometry). */
-  boxCount?: number;
+  /** Flat triangle soup: 9 numbers per triangle. */
+  positions: number[];
 }
 
 export interface ProcessedImage {
@@ -61,9 +58,11 @@ export interface ProcessedImage {
   /** Per palette color; in mosaic mode each band is the full 0..depth. */
   bands: BandInfo[];
   meshes: ColorMeshData[];
+  /** Non-empty pixel count (transparent pixels are empty space). */
+  filledPixels: number;
   widthMm: number;
   heightMm: number;
-  /** Effective max height (snapped to whole layers in layered/lithophane). */
+  /** Effective max height (snapped to whole layers in layered/lithophane/cmyk). */
   depthMm: number;
   pixelSizeMm: number;
   triangleCount: number;
@@ -249,6 +248,7 @@ export function processImageData(
 ): ProcessedImage {
   const gw = imageData.width;
   const gh = imageData.height;
+  const n = gw * gh;
   const pixelSize = widthMm / gw;
 
   // ---- CMYK lithophane: C/M/Y color layers + white relief, 4 parts
@@ -256,12 +256,12 @@ export function processImageData(
     const o = cmyk ?? DEFAULT_CMYK;
     const stacks = computeCmykStacks(imageData, o);
     const lh = Math.max(0.04, layerHeight);
-    const n = gw * gh;
 
-    // total height per pixel -> overall max
     let maxZ = 0;
+    let filled = 0;
     for (let i = 0; i < n; i++) {
       const t = (stacks.c[i] + stacks.m[i] + stacks.y[i] + stacks.w[i]) * lh;
+      if (t > 0) filled++;
       if (t > maxZ) maxZ = t;
     }
 
@@ -276,29 +276,35 @@ export function processImageData(
       },
     ];
 
-    const z0 = new Float32Array(n);
-    const z1 = new Float32Array(n);
+    const z0s = new Float32Array(n);
+    const z1s = new Float32Array(n);
     const base = new Float32Array(n); // z where the current part starts
+    // Extend each band by a micron so adjacent pixels whose bands merely
+    // touch (one ends where the other starts) overlap slightly — this keeps
+    // each part manifold instead of leaving a point-contact pinch edge.
+    const EPS = 0.001;
     const meshes: ColorMeshData[] = [];
     for (const def of partDefs) {
       const layers = stacks[def.key];
       let count = 0;
       for (let i = 0; i < n; i++) {
-        z0[i] = base[i];
-        z1[i] = base[i] + layers[i] * lh;
-        base[i] = z1[i];
-        if (layers[i] > 0) count++;
+        if (layers[i] > 0) {
+          z0s[i] = Math.max(0, base[i] - EPS);
+          z1s[i] = base[i] + layers[i] * lh + EPS;
+          count++;
+        } else {
+          z0s[i] = 0;
+          z1s[i] = 0;
+        }
+        base[i] += layers[i] * lh;
       }
-      const geo = buildStackedGeometry(z0, z1, gw, gh, pixelSize);
       meshes.push({
         color: def.color,
         name: def.name,
-        boxes: [],
         pixelCount: count,
         z0: 0,
         z1: maxZ,
-        positions: geo.positions,
-        boxCount: geo.boxCount,
+        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
       });
     }
 
@@ -310,12 +316,12 @@ export function processImageData(
       layerHeight,
       bands: [],
       meshes,
+      filledPixels: filled,
       widthMm,
       heightMm: gh * pixelSize,
       depthMm: maxZ,
       pixelSizeMm: pixelSize,
-      triangleCount:
-        meshes.reduce((sum, mm) => sum + (mm.positions?.length ?? 0), 0) / 9,
+      triangleCount: meshes.reduce((sum, mm) => sum + mm.positions.length, 0) / 9,
       cmykPreview: simulateCmykPreview(stacks, o),
     };
   }
@@ -328,32 +334,31 @@ export function processImageData(
       depthMm,
       layerHeight
     );
-    const geo = buildLithophaneGeometry(heights, gw, gh, pixelSize);
     let opaque = 0;
-    for (let i = 0; i < heights.length; i++) if (heights[i] > 0) opaque++;
+    for (let i = 0; i < n; i++) if (heights[i] > 0) opaque++;
+    const z0s = new Float32Array(n); // all zero: every column starts at z=0
     const mesh: ColorMeshData = {
       color: [245, 245, 240],
       name: "Lithophane (white filament)",
-      boxes: [],
       pixelCount: opaque,
       z0: 0,
       z1: maxMm,
-      positions: geo.positions,
-      boxCount: geo.boxCount,
+      positions: buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
     };
     return {
-      grid: new Uint8Array(gw * gh).fill(EMPTY), // preview uses `heights`
+      grid: new Uint8Array(n).fill(EMPTY), // preview uses `heights`
       gw,
       gh,
       mode,
       layerHeight,
       bands: [],
       meshes: [mesh],
+      filledPixels: opaque,
       widthMm,
       heightMm: gh * pixelSize,
       depthMm: maxMm,
       pixelSizeMm: pixelSize,
-      triangleCount: geo.positions.length / 9,
+      triangleCount: mesh.positions.length / 9,
       heights,
       minThicknessMm: minMm,
     };
@@ -363,8 +368,12 @@ export function processImageData(
   const grid = mapPixelsToPalette(imageData.data, palette);
 
   const counts = new Array<number>(palette.length).fill(0);
-  for (let i = 0; i < grid.length; i++) {
-    if (grid[i] !== EMPTY) counts[grid[i]]++;
+  let filled = 0;
+  for (let i = 0; i < n; i++) {
+    if (grid[i] !== EMPTY) {
+      counts[grid[i]]++;
+      filled++;
+    }
   }
 
   let bands: BandInfo[];
@@ -377,16 +386,25 @@ export function processImageData(
     meshes = palette.map((color, i) => {
       // Band i covers every pixel whose color is i *or higher* in the stack;
       // pixels of color i stop here, so their top face shows filament i.
-      const rects = buildRects(grid, gw, gh, (v) => v !== EMPTY && v >= i);
+      const z0s = new Float32Array(n);
+      const z1s = new Float32Array(n);
+      let count = 0;
+      for (let p = 0; p < n; p++) {
+        if (grid[p] !== EMPTY && grid[p] >= i) {
+          z0s[p] = bands[i].z0;
+          z1s[p] = bands[i].z1;
+          count++;
+        }
+      }
       return {
         color,
         name: `Color ${i + 1} (${rgbToHex(color)}) z ${fmtZ(
           bands[i].z0
         )}-${fmtZ(bands[i].z1)}mm`,
-        boxes: rectsToBoxes(rects, gh, pixelSize),
-        pixelCount: counts[i],
+        pixelCount: count,
         z0: bands[i].z0,
         z1: bands[i].z1,
+        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
       };
     });
   } else {
@@ -396,18 +414,29 @@ export function processImageData(
       layer0: 1,
       layer1: Math.max(1, Math.round(depthMm / layerHeight)),
     }));
-    meshes = palette.map((color, i) => ({
-      color,
-      name: `Color ${i + 1} (${rgbToHex(color)})`,
-      boxes: rectsToBoxes(buildRectsForColor(grid, gw, gh, i), gh, pixelSize),
-      pixelCount: counts[i],
-      z0: 0,
-      z1: depthMm,
-    }));
+    meshes = palette.map((color, i) => {
+      const z0s = new Float32Array(n);
+      const z1s = new Float32Array(n);
+      let count = 0;
+      for (let p = 0; p < n; p++) {
+        if (grid[p] === i) {
+          z1s[p] = depthMm;
+          count++;
+        }
+      }
+      return {
+        color,
+        name: `Color ${i + 1} (${rgbToHex(color)})`,
+        pixelCount: count,
+        z0: 0,
+        z1: depthMm,
+        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
+      };
+    });
   }
 
-  let triangleCount = 0;
-  for (const m of meshes) triangleCount += m.boxes.length * 12;
+  const triangleCount =
+    meshes.reduce((sum, m) => sum + m.positions.length, 0) / 9;
 
   return {
     grid,
@@ -417,6 +446,7 @@ export function processImageData(
     layerHeight,
     bands,
     meshes,
+    filledPixels: filled,
     widthMm,
     heightMm: gh * pixelSize,
     depthMm: effectiveDepth,
@@ -430,6 +460,6 @@ export function meshPartPositions(p: ProcessedImage) {
   return p.meshes.map((m) => ({
     name: m.name,
     color: m.color,
-    positions: m.positions ?? meshPositions(m.boxes, m.z0, m.z1),
+    positions: m.positions,
   }));
 }

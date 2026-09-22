@@ -99,16 +99,19 @@ lib/pipeline.ts    downscale + orchestration glue
 scripts/           core-logic test
 ```
 
-## Bambu Studio note
+## Bambu Studio notes
 
-The exported 3MF embeds Bambu-style metadata
-(`Metadata/model_settings.config` + `Metadata/project_settings.config`)
-alongside the standard 3MF `m:colorgroup`: parts come pre-assigned to
-extruders 1–4, and the filament section is pre-populated with the four
-colors (PLA). The project config carries the `nozzle_diameter` /
-`extruder_type` arrays that Bambu Studio's config validity check requires
-(tested against v2.8.2.61's import code), so no "invalid config" dialog
-appears and filament colors load directly.
+- Meshes are manifold (boundary-only heightfield meshing) — no non-manifold
+  repair prompts.
+- On import, Bambu Studio shows its standard color-mapping dialog (the same
+  one used for colored OBJ/3MF imports): it lists the part colors and lets
+  you confirm the filament mapping — click OK and each part lands on its own
+  extruder. Parts also carry per-object extruder metadata
+  (`Metadata/model_settings.config`) so the assignment is pre-set.
+- Bambu Studio deliberately ignores project settings
+  (`Metadata/project_settings.config`) in files it did not create, so the
+  filament colors come from the color-mapping dialog / your own filament
+  choices.
 
 ## Tips for printing
 

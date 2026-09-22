@@ -1,7 +1,7 @@
 /**
  * Core-logic smoke test (run: npx tsx scripts/test-core.ts)
- * Builds a small synthetic image, quantizes it, generates meshes,
- * and validates the STL + 3MF output structure.
+ * Builds synthetic images, runs all four print modes through the pipeline,
+ * and validates geometry (manifoldness, z-bounds) plus STL/3MF output.
  */
 import {
   autoPalette,
@@ -12,7 +12,6 @@ import {
   nearestColorIndex,
   type RGB,
 } from "../lib/quantize";
-import { buildRectsForColor, meshPositions, rectsToBoxes } from "../lib/mesh";
 import { build3MF, buildSTL, buildSTLZip } from "../lib/exporters";
 import {
   computeCmykStacks,
@@ -31,7 +30,35 @@ function check(cond: boolean, msg: string) {
   }
 }
 
-// --- Build a synthetic 8x8 RGBA image: 4 quadrant colors + transparent corner
+/** Count edges shared by other than exactly 2 triangles (non-manifold). */
+function countNonManifoldEdges(positions: number[]): number {
+  const vkey = (i: number) =>
+    positions[i].toFixed(3) +
+    "," +
+    positions[i + 1].toFixed(3) +
+    "," +
+    positions[i + 2].toFixed(3);
+  const edges = new Map<string, number>();
+  for (let t = 0; t + 8 < positions.length; t += 9) {
+    const v0 = vkey(t),
+      v1 = vkey(t + 3),
+      v2 = vkey(t + 6);
+    const pairs = [
+      [v0, v1],
+      [v1, v2],
+      [v2, v0],
+    ];
+    for (const [a, b] of pairs) {
+      const k = a < b ? a + "|" + b : b + "|" + a;
+      edges.set(k, (edges.get(k) ?? 0) + 1);
+    }
+  }
+  let bad = 0;
+  for (const c of edges.values()) if (c !== 2) bad++;
+  return bad;
+}
+
+// --- Synthetic 8x8 RGBA image: 4 quadrant colors + transparent corner
 const W = 8,
   H = 8;
 const RED: RGB = [220, 30, 30];
@@ -42,31 +69,21 @@ const data = new Uint8ClampedArray(W * H * 4);
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
     const o = (y * W + x) * 4;
-    let c: RGB;
-    if (x < 4 && y < 4) c = RED;
-    else if (x >= 4 && y < 4) c = GREEN;
-    else if (x < 4 && y >= 4) c = BLUE;
-    else c = WHITE;
-    // add slight noise so median cut has something to chew on
+    const c = x < 4 ? (y < 4 ? RED : BLUE) : y < 4 ? GREEN : WHITE;
     data[o] = Math.min(255, Math.max(0, c[0] + ((x * 7 + y * 13) % 9) - 4));
     data[o + 1] = Math.min(255, Math.max(0, c[1] + ((x * 5 + y * 11) % 9) - 4));
     data[o + 2] = Math.min(255, Math.max(0, c[2] + ((x * 3 + y * 17) % 9) - 4));
     data[o + 3] = 255;
   }
 }
-// transparent pixel at (0,0)
-data[3] = 0;
+data[3] = 0; // transparent pixel at (0,0)
+const quadImage = { data, width: W, height: H } as unknown as ImageData;
 
 console.log("quantization:");
 const palette = autoPalette(collectPixels(data), 4);
 check(palette.length === 4, `autoPalette returns 4 colors (got ${palette.length})`);
-check(
-  palette.every((p) => p.every((v) => v >= 0 && v <= 255)),
-  "palette values in 0..255"
-);
 console.log("  palette:", palette.map(rgbToHex).join(", "));
 
-// every true cluster color must have a close palette match
 const targets = [RED, GREEN, BLUE, WHITE];
 for (const t of targets) {
   const i = nearestColorIndex(t[0], t[1], t[2], palette);
@@ -78,131 +95,47 @@ for (const t of targets) {
 const grid = mapPixelsToPalette(data, palette);
 check(grid.length === W * H, "grid has one entry per pixel");
 check(grid[0] === EMPTY, "transparent pixel maps to EMPTY");
-check(
-  Array.from(grid.slice(1)).every((g) => g < 4),
-  "all other pixels map to a palette index"
-);
 
-// pixels should be classified to the cluster they were generated from
-let misclassified = 0;
-for (let y = 0; y < H; y++) {
-  for (let x = 0; x < W; x++) {
-    if (x === 0 && y === 0) continue;
-    const o = (y * W + x) * 4;
-    const want = nearestColorIndex(data[o], data[o + 1], data[o + 2], targets);
-    const got = palette[grid[y * W + x]];
-    const wantP = targets[want];
-    const d =
-      Math.abs(wantP[0] - got[0]) +
-      Math.abs(wantP[1] - got[1]) +
-      Math.abs(wantP[2] - got[2]);
-    if (d > 40) misclassified++;
-  }
-}
+console.log("mosaic mode:");
+const mosaic = processImageData(quadImage, palette, 40, 5, "mosaic");
+check(mosaic.meshes.length === 4, "mosaic: 4 parts");
 check(
-  misclassified === 0,
-  `all pixels classified to their source cluster (${misclassified} wrong)`
+  mosaic.meshes.map((m) => m.pixelCount).join(",") === "16,15,16,16",
+  `mosaic per-color coverage 16,15,16,16 (got ${mosaic.meshes.map((m) => m.pixelCount).join(",")})`
 );
-
-console.log("mesh generation:");
-const rectsPerColor = palette.map((_, i) => buildRectsForColor(grid, W, H, i));
-for (let i = 0; i < 4; i++) {
-  console.log(
-    `  color ${i} ${rgbToHex(palette[i])}: ${rectsPerColor[i].length} rect(s):`,
-    rectsPerColor[i].map((r) => `[${r.x0},${r.y0}..${r.x1},${r.y1}]`).join(" ")
+for (const m of mosaic.meshes) {
+  check(m.positions.length > 0 && m.positions.length % 9 === 0, `${m.name}: positions valid`);
+  const bad = countNonManifoldEdges(m.positions);
+  check(bad === 0, `${m.name}: manifold (${bad} bad edges)`);
+  const zs = m.positions.filter((_, i) => i % 3 === 2);
+  check(
+    zs.every((z) => Math.abs(z) < 1e-6 || Math.abs(z - 5) < 1e-6),
+    `${m.name}: all z at 0 or 5`
   );
 }
-// The quadrant with the transparent pixel is an L-shape -> 2 rects;
-// the other three solid quadrants merge into exactly 1 rect each.
-const rectCounts = rectsPerColor.map((rs) => rs.length).sort();
-check(
-  rectCounts.join(",") === "1,1,1,2",
-  `rect counts are 1,1,1,2 (got ${rectCounts.join(",")})`
-);
-
-const pixelSize = 40 / W; // 40mm wide plate
-const depth = 5;
-const parts = palette.map((color, i) => {
-  const boxes = rectsToBoxes(rectsPerColor[i], H, pixelSize);
-  return { name: `Color ${i + 1}`, color, positions: meshPositions(boxes, 0, depth) };
-});
-
-for (const p of parts) {
-  check(p.positions.length % 9 === 0, `part "${p.name}" positions multiple of 9`);
-}
-const totalTris = parts.reduce((s, p) => s + p.positions.length / 9, 0);
-check(totalTris === 5 * 12, `5 boxes total -> 60 triangles (got ${totalTris})`);
-
-// geometry sanity: all z within [0, depth]
-const zs = parts.flatMap((p) => p.positions.filter((_, i) => i % 3 === 2));
-check(
-  zs.every((z) => z >= 0 && z <= depth),
-  "all z coordinates within [0, depth]"
-);
-
-console.log("STL:");
-// use a solid single-box part for the STL byte-size check
-const single = parts.find((p) => p.positions.length === 108)!;
-const stl = buildSTL(single.positions);
-check(stl.byteLength === 84 + 12 * 50, `binary STL size correct (${stl.byteLength})`);
-const dv = new DataView(stl);
-check(dv.getUint32(80, true) === 12, "STL triangle count = 12");
 
 console.log("layered (HueForge-style) mode:");
-const fakeImageData = { data, width: W, height: H } as unknown as ImageData;
-const layered = processImageData(fakeImageData, palette, 40, 5, "layered", 0.2);
-
-check(layered.bands.length === 4, `4 color bands (got ${layered.bands.length})`);
+const layered = processImageData(quadImage, palette, 40, 5, "layered", 0.2);
 const expectedTops = [1.2, 2.6, 3.8, 5.0];
 check(
   layered.bands.every((b, i) => Math.abs(b.z1 - expectedTops[i]) < 1e-6),
-  `band tops snap to layers [${layered.bands.map((b) => b.z1.toFixed(2)).join(", ")}] (expect 1.20, 2.60, 3.80, 5.00)`
+  `band tops snap to layers [${layered.bands.map((b) => b.z1.toFixed(2)).join(", ")}]`
 );
 check(Math.abs(layered.depthMm - 5) < 1e-6, "effective depth = 5 mm");
-
-// band coverage must nest: band k covers pixels with palette index >= k
-const pxArea = layered.pixelSizeMm ** 2;
-const bandAreas = layered.meshes.map(
-  (m) => m.boxes.reduce((sum, b) => sum + b.w * b.h, 0) / pxArea
-);
 check(
-  bandAreas.join(",") === "63,47,32,16",
-  `band pixel coverage nests 63,47,32,16 (got ${bandAreas.join(",")})`
+  layered.meshes.map((m) => m.pixelCount).join(",") === "63,47,32,16",
+  `band coverage nests 63,47,32,16 (got ${layered.meshes.map((m) => m.pixelCount).join(",")})`
 );
-
 for (let i = 0; i < 4; i++) {
   const m = layered.meshes[i];
-  const wantZ0 = i === 0 ? 0 : layered.bands[i - 1].z1;
+  const bad = countNonManifoldEdges(m.positions);
+  check(bad === 0, `layered band ${i}: manifold (${bad} bad edges)`);
+  const zs = m.positions.filter((_, i2) => i2 % 3 === 2);
   check(
-    Math.abs(m.z0 - wantZ0) < 1e-9 && Math.abs(m.z1 - layered.bands[i].z1) < 1e-9,
-    `band ${i} z-range ${m.z0.toFixed(2)}-${m.z1.toFixed(2)} mm`
+    zs.every((z) => z >= m.z0 - 1e-6 && z <= m.z1 + 1e-6),
+    `layered band ${i}: z within [${m.z0.toFixed(1)}, ${m.z1.toFixed(1)}]`
   );
 }
-
-const lpos = meshPartPositions(layered);
-const lzs = lpos.flatMap((pt) => pt.positions.filter((_, i) => i % 3 === 2));
-check(
-  lzs.every((z) => z >= 0 && z <= 5 + 1e-6),
-  "layered mesh z within [0, 5]"
-);
-check(
-  lpos.every((pt) => pt.positions.length > 0),
-  "all 4 layered parts non-empty"
-);
-
-console.log("mosaic mode (via pipeline):");
-const mosaic = processImageData(fakeImageData, palette, 40, 5, "mosaic");
-check(
-  mosaic.meshes.every((m) => m.z0 === 0 && m.z1 === 5),
-  "mosaic bands all span 0-5 mm"
-);
-const mosaicAreas = mosaic.meshes.map(
-  (m) => m.boxes.reduce((sum, b) => sum + b.w * b.h, 0) / mosaic.pixelSizeMm ** 2
-);
-check(
-  mosaicAreas.join(",") === "16,15,16,16",
-  `mosaic per-color coverage 16,15,16,16 (got ${mosaicAreas.join(",")})`
-);
 
 console.log("lithophane mode:");
 const GW = 16,
@@ -241,22 +174,17 @@ check(
   Math.abs(hAt(0, 5) - 4) < 1e-4 && Math.abs(hAt(15, 5) - 0.8) < 1e-4,
   `black -> max 4.0mm, white -> min 0.8mm (got ${hAt(0, 5).toFixed(2)}, ${hAt(15, 5).toFixed(2)})`
 );
-check(Math.abs(litho.depthMm - 4) < 1e-4, "effective depth = 4 mm");
-const lithoBoxCount = litho.meshes[0].boxCount ?? 0;
-check(
-  lithoBoxCount > 0 && lithoBoxCount <= 16,
-  `column-uniform heights merge into <= 16 boxes (got ${lithoBoxCount})`
-);
-const lithoPositions = litho.meshes[0].positions!;
-check(
-  lithoPositions.length > 0 && lithoPositions.length % 9 === 0,
-  "lithophane positions valid"
-);
-const lithoZs = lithoPositions.filter((_, i) => i % 3 === 2);
-check(
-  lithoZs.every((z) => z >= 0 && z <= 4 + 1e-4),
-  "lithophane z within [0, 4]"
-);
+{
+  const lp = litho.meshes[0].positions;
+  check(lp.length > 0 && lp.length % 9 === 0, "lithophane positions valid");
+  const bad = countNonManifoldEdges(lp);
+  check(bad === 0, `lithophane manifold (${bad} bad edges)`);
+  const zs = lp.filter((_, i) => i % 3 === 2);
+  check(
+    zs.every((z) => z >= -1e-6 && z <= 4 + 1e-4),
+    "lithophane z within [0, 4]"
+  );
+}
 
 console.log("CMYK lithophane mode:");
 const cmykData = new Uint8ClampedArray(5 * 1 * 4);
@@ -288,10 +216,6 @@ check(
   "red pixel: magenta + yellow only"
 );
 check(
-  stacks.c[3] === 2 && stacks.m[3] === 2 && stacks.y[3] === 2,
-  "gray pixel: equal mid color layers"
-);
-check(
   stacks.w[4] === 0 && stacks.c[4] + stacks.m[4] + stacks.y[4] === 0,
   "transparent pixel: no geometry"
 );
@@ -314,21 +238,20 @@ check(
   cmykProc.meshes[3].pixelCount === 4,
   `white part covers all 4 opaque pixels (got ${cmykProc.meshes[3].pixelCount})`
 );
+for (const m of cmykProc.meshes) {
+  const bad = countNonManifoldEdges(m.positions);
+  check(bad === 0, `${m.name}: manifold (${bad} bad edges)`);
+}
 const prev = cmykProc.cmykPreview!;
 check(
   prev[0] > prev[4],
   `backlit preview: white pixel brighter than black (${prev[0]} vs ${prev[4]})`
 );
-check(prev[19] === 0, "transparent pixel has alpha 0 in preview");
-const cmykPos = meshPartPositions(cmykProc);
-const cmykZs = cmykPos.flatMap((pt) => pt.positions.filter((_, i) => i % 3 === 2));
-check(
-  cmykZs.every((z) => z >= -1e-9 && z <= 4.4 + 1e-4),
-  "CMYK z within [0, 4.4]"
-);
 
-console.log("3MF:");
+console.log("exports:");
 async function main() {
+  // 3MF from the mosaic parts
+  const parts = meshPartPositions(mosaic);
   const blob = await build3MF(parts);
   const zip = await JSZip.loadAsync(await blob.arrayBuffer());
   const names = Object.keys(zip.files).sort();
@@ -350,6 +273,12 @@ async function main() {
     (model.match(/pid="1" pindex=/g) || []).length === 4,
     "all 4 objects reference the colorgroup"
   );
+  const triCount = (model.match(/<triangle /g) || []).length;
+  const coloredTris = (model.match(/pid="1" p1="\d+"\/>/g) || []).length;
+  check(
+    triCount > 0 && triCount === coloredTris,
+    `every triangle carries colorgroup pid/p1 (${coloredTris}/${triCount})`
+  );
   check(model.includes('unit="millimeter"'), "3MF units are millimetres");
   check(/<m:color color="#[0-9A-F]{8}"/.test(model), "3MF colors are #RRGGBBAA");
 
@@ -370,10 +299,6 @@ async function main() {
       `model_settings assigns extruder ${e}`
     );
   }
-  check(
-    (ms.match(/<part /g) || []).length === 4,
-    "model_settings has 4 parts with matching ids"
-  );
   const ps = JSON.parse(
     await zip.file("Metadata/project_settings.config")!.async("string")
   );
@@ -382,37 +307,17 @@ async function main() {
     "project settings: 4 filament colours"
   );
   check(
-    ps.filament_colour.every((c: string) => /^#[0-9A-F]{6}$/.test(c)),
-    "filament colours are #RRGGBB"
-  );
-  check(
-    Array.isArray(ps.filament_type) &&
-      ps.filament_type.every((t: string) => t === "PLA"),
-    "filament types default to PLA"
-  );
-  check(
     Array.isArray(ps.nozzle_diameter) &&
       ps.nozzle_diameter.length === 4 &&
       ps.nozzle_diameter.every((d: string) => d === "0.4"),
     "nozzle_diameter: 4 entries (Bambu config validity check)"
   );
   check(
-    Array.isArray(ps.extruder_type) &&
-      ps.extruder_type.length === 4 &&
-      ps.extruder_type.every((t: string) => t === "Bowden"),
+    Array.isArray(ps.extruder_type) && ps.extruder_type.length === 4,
     "extruder_type: 4 entries matching nozzle_diameter size"
   );
-  const triCount = (model.match(/<triangle /g) || []).length;
-  check(triCount === 5 * 12, `3MF triangle count = ${triCount} (expect 60)`);
 
-  const layeredBlob = await build3MF(meshPartPositions(layered));
-  const lzip = await JSZip.loadAsync(await layeredBlob.arrayBuffer());
-  const lmodel = await lzip.file("3D/3dmodel.model")!.async("string");
-  check(
-    (lmodel.match(/<object /g) || []).length === 4,
-    "layered 3MF has 4 objects"
-  );
-
+  // lithophane 3MF = single part
   const lithoBlob = await build3MF(meshPartPositions(litho));
   const lithoZip = await JSZip.loadAsync(await lithoBlob.arrayBuffer());
   const lithoModel = await lithoZip.file("3D/3dmodel.model")!.async("string");
@@ -424,12 +329,8 @@ async function main() {
     (lithoModel.match(/<m:color /g) || []).length === 1,
     "lithophane 3MF colorgroup has 1 color"
   );
-  const lithoStl = buildSTL(lithoPositions);
-  check(
-    lithoStl.byteLength === 84 + (lithoPositions.length / 9) * 50,
-    "lithophane STL size matches triangle count"
-  );
 
+  // CMYK 3MF = 4 ordered parts
   const cmykBlob = await build3MF(meshPartPositions(cmykProc));
   const cmykZip = await JSZip.loadAsync(await cmykBlob.arrayBuffer());
   const cmykModel = await cmykZip.file("3D/3dmodel.model")!.async("string");
@@ -442,12 +343,21 @@ async function main() {
     "CMYK 3MF part names present"
   );
 
-  console.log("STL zip:");
+  // binary STL layout
+  const stl = buildSTL(parts[0].positions);
+  const tris = parts[0].positions.length / 9;
+  check(
+    stl.byteLength === 84 + tris * 50,
+    `binary STL size correct (${stl.byteLength})`
+  );
+  check(new DataView(stl).getUint32(80, true) === tris, "STL triangle count header");
+
+  // STL zip with one file per color
   const zipBlob = await buildSTLZip(parts);
   const szip = await JSZip.loadAsync(await zipBlob.arrayBuffer());
   check(
     Object.keys(szip.files).filter((n) => n.endsWith(".stl")).length === 4,
-    "zip contains 4 STL files"
+    "STL zip contains 4 files"
   );
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);

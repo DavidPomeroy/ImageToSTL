@@ -107,7 +107,7 @@ const RELS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </Relationships>`;
 
 /** Build <mesh> XML with vertex de-duplication to keep the file small. */
-function meshXml(positions: number[]): string {
+function meshXml(positions: number[], pindex: number): string {
   const index = new Map<string, number>();
   const verts: string[] = [];
   const tris: string[] = [];
@@ -127,7 +127,9 @@ function meshXml(positions: number[]): string {
     const a = vid(positions[t], positions[t + 1], positions[t + 2]);
     const b = vid(positions[t + 3], positions[t + 4], positions[t + 5]);
     const c = vid(positions[t + 6], positions[t + 7], positions[t + 8]);
-    tris.push(`<triangle v1="${a}" v2="${b}" v3="${c}"/>`);
+    tris.push(
+      `<triangle v1="${a}" v2="${b}" v3="${c}" pid="1" p1="${pindex}"/>`
+    );
   }
 
   return `<mesh><vertices>${verts.join("")}</vertices><triangles>${tris.join(
@@ -148,7 +150,7 @@ export function build3MFModelXml(parts: ExportPart[]): string {
       (p, i) => `    <object id="${i + 2}" type="model" name="${escapeXml(
         p.name
       )}" pid="1" pindex="${i}">
-      ${meshXml(p.positions)}
+      ${meshXml(p.positions, i)}
     </object>`
     )
     .join("\n");

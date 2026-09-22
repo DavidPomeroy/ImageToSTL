@@ -151,9 +151,6 @@ export default function Home() {
 
   const counts = processed ? processed.meshes.map((m) => m.pixelCount) : [];
   const pixelArea = processed ? processed.pixelSizeMm ** 2 : 0;
-  const boxCount = processed
-    ? processed.meshes.reduce((s, m) => s + (m.boxCount ?? m.boxes.length), 0)
-    : 0;
   const swapBands = processed ? processed.bands.slice(1) : [];
 
   return (
@@ -379,9 +376,10 @@ export default function Home() {
                         </dd>
                       </div>
                       <div className="flex justify-between">
-                        <dt className="text-zinc-500">Regions (boxes)</dt>
+                        <dt className="text-zinc-500">Pixels printed</dt>
                         <dd className="tabular-nums text-zinc-300">
-                          {boxCount.toLocaleString()}
+                          {processed.filledPixels.toLocaleString()} /{" "}
+                          {(processed.gw * processed.gh).toLocaleString()}
                         </dd>
                       </div>
                       <div className="flex justify-between">
@@ -455,10 +453,11 @@ export default function Home() {
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-zinc-600">
-                    Bambu Studio: parts load with extruders 1–4 pre-assigned
-                    and the filament section is pre-populated with the part
-                    colors (PLA) — embedded Bambu metadata +
-                    standards-compliant 3MF colorgroup.
+                    Bambu Studio: on import, confirm the color-mapping dialog
+                    (standard 3MF color import) to assign each part its
+                    filament — parts also carry extruder metadata so the
+                    mapping is pre-set. Meshes are manifold; no repair
+                    prompts.
                   </p>
                 </div>
               </>

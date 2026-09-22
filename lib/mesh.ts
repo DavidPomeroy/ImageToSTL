@@ -140,3 +140,43 @@ export function meshPositions(boxes: Box[], z0: number, z1: number): number[] {
   for (const b of boxes) pushBoxTriangles(out, b, z0, z1);
   return out;
 }
+
+/**
+ * Lithophane geometry: each pixel has its own thickness. Pixels sharing a
+ * (layer-snapped) height are merged into rects, then every level is extruded
+ * from z=0 to that height. Returns one concatenated triangle soup — a
+ * lithophane is a single-filament part.
+ */
+export function buildLithophaneGeometry(
+  heights: Float32Array,
+  gw: number,
+  gh: number,
+  pixelSize: number
+): { positions: number[]; boxCount: number } {
+  const byHeight = new Map<number, number[]>(); // key = mm * 1000 (integer)
+  for (let i = 0; i < heights.length; i++) {
+    const h = heights[i];
+    if (h <= 0) continue;
+    const key = Math.round(h * 1000);
+    let arr = byHeight.get(key);
+    if (!arr) {
+      arr = [];
+      byHeight.set(key, arr);
+    }
+    arr.push(i);
+  }
+
+  const positions: number[] = [];
+  let boxCount = 0;
+  const mask = new Uint8Array(gw * gh);
+  for (const [key, pixels] of byHeight) {
+    mask.fill(0);
+    for (const p of pixels) mask[p] = 1;
+    const rects = buildRects(mask, gw, gh, (v) => v === 1);
+    const boxes = rectsToBoxes(rects, gh, pixelSize);
+    boxCount += boxes.length;
+    const h = key / 1000;
+    for (const b of boxes) pushBoxTriangles(positions, b, 0, h);
+  }
+  return { positions, boxCount };
+}

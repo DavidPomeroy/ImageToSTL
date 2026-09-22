@@ -14,7 +14,7 @@ import {
   type ProcessedImage,
 } from "@/lib/pipeline";
 import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
-import { build3MF, buildSTLZip } from "@/lib/exporters";
+import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 
 const Preview3D = dynamic(() => import("@/components/Preview3D"), {
   ssr: false,
@@ -53,6 +53,7 @@ export default function Home() {
   const [widthMm, setWidthMm] = useState(100);
   const [depthMm, setDepthMm] = useState(5);
   const [layerHeight, setLayerHeight] = useState(0.2);
+  const [minThickness, setMinThickness] = useState(0.8);
   const [palette, setPalette] = useState<RGB[]>([]);
   const [fitNonce, setFitNonce] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
@@ -89,10 +90,10 @@ export default function Home() {
 
   const processed: ProcessedImage | null = useMemo(
     () =>
-      imageData && palette.length > 0
-        ? processImageData(imageData, palette, widthMm, depthMm, mode, layerHeight)
+      imageData && (mode === "lithophane" || palette.length > 0)
+        ? processImageData(imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness)
         : null,
-    [imageData, palette, widthMm, depthMm, mode, layerHeight]
+    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness]
   );
 
   const exportParts = useMemo(
@@ -118,10 +119,17 @@ export default function Home() {
     if (!hasGeometry) return;
     setBusy("stl");
     try {
-      saveBlob(
-        await buildSTLZip(exportParts),
-        `${imageName}-4color-${mode}-stls.zip`
-      );
+      if (mode === "lithophane") {
+        saveBlob(
+          new Blob([buildSTL(exportParts[0].positions)]),
+          `${imageName}-lithophane.stl`
+        );
+      } else {
+        saveBlob(
+          await buildSTLZip(exportParts),
+          `${imageName}-4color-${mode}-stls.zip`
+        );
+      }
     } finally {
       setBusy(null);
     }
@@ -130,7 +138,7 @@ export default function Home() {
   const counts = processed ? processed.meshes.map((m) => m.pixelCount) : [];
   const pixelArea = processed ? processed.pixelSizeMm ** 2 : 0;
   const boxCount = processed
-    ? processed.meshes.reduce((s, m) => s + m.boxes.length, 0)
+    ? processed.meshes.reduce((s, m) => s + (m.boxCount ?? m.boxes.length), 0)
     : 0;
   const swapBands = processed ? processed.bands.slice(1) : [];
 
@@ -143,9 +151,9 @@ export default function Home() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
             Upload an image and turn it into a 4-color, 5&nbsp;mm deep
-            3D-printable plate — as a flat multi-material mosaic or a
-            HueForge-style layered relief. Exports as a multi-part 3MF (or 4
-            STLs) ready for Bambu Studio or PrusaSlicer. Everything runs
+            3D-printable plate — flat multi-material mosaic, HueForge-style
+            layered relief, or single-filament lithophane. Exports as 3MF or
+            STL, ready for Bambu Studio or PrusaSlicer. Everything runs
             locally in your browser.
           </p>
         </header>
@@ -169,11 +177,13 @@ export default function Home() {
                 widthMm={widthMm}
                 depthMm={depthMm}
                 layerHeight={layerHeight}
+                minThickness={minThickness}
                 onMode={setMode}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
                 onDepthMm={setDepthMm}
                 onLayerHeight={setLayerHeight}
+                onMinThickness={setMinThickness}
               />
               {processed && processed.pixelSizeMm < 0.4 && (
                 <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
@@ -185,7 +195,7 @@ export default function Home() {
               )}
             </section>
 
-            {processed && (
+            {processed && mode !== "lithophane" && (
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
                   {mode === "layered"
@@ -232,9 +242,9 @@ export default function Home() {
                   No image yet
                 </h3>
                 <p className="mt-1 max-w-sm text-sm text-zinc-500">
-                  Upload an image to generate a 4-color printable plate —
-                  flat mosaic or HueForge-style layered relief, up to{" "}
-                  {depthMm}&nbsp;mm deep.
+                  Upload an image to generate a printable plate — flat
+                  mosaic, HueForge-style relief, or backlit lithophane, up
+                  to {depthMm}&nbsp;mm deep.
                 </p>
                 <ol className="mt-6 space-y-2 text-left text-sm text-zinc-500">
                   <li>
@@ -256,13 +266,16 @@ export default function Home() {
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                     <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                      Quantized image · {processed.gw}×{processed.gh} px
+                      {processed.mode === "lithophane" ? "Backlit preview" : "Quantized image"} · {processed.gw}×{processed.gh} px
                     </h3>
                     <Preview2D
                       grid={processed.grid}
                       gw={processed.gw}
                       gh={processed.gh}
                       palette={palette}
+                      heights={processed.heights}
+                      hMin={processed.minThicknessMm}
+                      hMax={processed.depthMm}
                     />
                     <dl className="mt-3 space-y-1 text-xs">
                       <div className="flex justify-between">
@@ -282,6 +295,16 @@ export default function Home() {
                           </dd>
                         </div>
                       )}
+                      {processed.mode === "lithophane" &&
+                        processed.minThicknessMm !== undefined && (
+                          <div className="flex justify-between">
+                            <dt className="text-zinc-500">Thickness range</dt>
+                            <dd className="tabular-nums text-zinc-300">
+                              {processed.minThicknessMm.toFixed(1)} –{" "}
+                              {processed.depthMm.toFixed(1)} mm
+                            </dd>
+                          </div>
+                        )}
                       <div className="flex justify-between">
                         <dt className="text-zinc-500">Pixel size</dt>
                         <dd className="tabular-nums text-zinc-300">
@@ -320,14 +343,12 @@ export default function Home() {
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                   <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                    4 · Export
+                    {mode === "lithophane" ? "3" : "4"} · Export
                   </h3>
                   <p className="mb-4 max-w-2xl text-xs leading-relaxed text-zinc-500">
-                    The 3MF bundles all 4 color parts with their filament
-                    colors: open it in Bambu Studio / PrusaSlicer, import as
-                    one object with multiple parts, and assign an extruder to
-                    each color. Or grab the STL zip and import all 4 files
-                    together, aligned at the origin.
+                    {processed.mode === "lithophane"
+                      ? "One single-filament part: print flat with the relief side up, white or natural PLA, high infill (or several walls). Hold the print in front of a light — thin areas glow bright, thick areas stay dark."
+                      : "The 3MF bundles all 4 color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all 4 files together, aligned at the origin."}
                   </p>
                   {processed.mode === "layered" && swapBands.length > 0 && (
                     <p className="mb-4 max-w-2xl rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-emerald-300/90">
@@ -347,7 +368,9 @@ export default function Home() {
                     >
                       {busy === "3mf"
                         ? "Building 3MF…"
-                        : "Download 3MF (4 color parts)"}
+                        : mode === "lithophane"
+                          ? "Download 3MF"
+                          : "Download 3MF (4 color parts)"}
                     </button>
                     <button
                       type="button"
@@ -356,8 +379,10 @@ export default function Home() {
                       className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy === "stl"
-                        ? "Building STLs…"
-                        : "Download STL zip (4 files)"}
+                        ? "Building STL…"
+                        : mode === "lithophane"
+                          ? "Download STL"
+                          : "Download STL zip (4 files)"}
                     </button>
                   </div>
                 </div>

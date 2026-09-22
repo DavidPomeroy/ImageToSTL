@@ -35,30 +35,43 @@ function Slider({ label, value, min, max, step, unit, onChange }: SliderProps) {
   );
 }
 
+const MODES = [
+  ["mosaic", "Mosaic", "flat · 4 filaments"],
+  ["layered", "Layered", "HueForge relief"],
+  ["lithophane", "Lithophane", "backlit · 1 filament"],
+] as const;
+
+const DESCRIPTIONS: Record<PrintMode, string> = {
+  mosaic:
+    "Mosaic: each of the 4 colors is a separate part side by side, all the same thickness — print with 4 filaments on a multi-material printer (Bambu AMS, Prusa MMU, toolchanger).",
+  layered:
+    "Layered: filaments are stacked bottom → top (Filament 1 at the base). Each pixel's column stops at the top of its color's band — a HueForge-style variable-height relief.",
+  lithophane:
+    "Lithophane: a single-filament panel where thickness encodes brightness — dark areas print thick, bright areas thin. Backlight the finished print and the image appears.",
+};
+
 export default function Controls(props: {
   mode: PrintMode;
   resolution: number;
   widthMm: number;
   depthMm: number;
   layerHeight: number;
+  minThickness: number;
   onMode: (m: PrintMode) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
   onDepthMm: (v: number) => void;
   onLayerHeight: (v: number) => void;
+  onMinThickness: (v: number) => void;
 }) {
   const layered = props.mode === "layered";
+  const litho = props.mode === "lithophane";
   return (
     <div className="space-y-4">
       <div>
         <div className="mb-1 text-sm text-zinc-300">Print mode</div>
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
-          {(
-            [
-              ["mosaic", "Mosaic", "flat · uniform thickness"],
-              ["layered", "Layered", "HueForge-style relief"],
-            ] as const
-          ).map(([m, label, hint]) => (
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+          {MODES.map(([m, label, hint]) => (
             <button
               key={m}
               type="button"
@@ -75,9 +88,7 @@ export default function Controls(props: {
           ))}
         </div>
         <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-          {layered
-            ? "Layered: filaments are stacked bottom → top (Filament 1 at the base). Each pixel's column stops at the top of its color's band, so the top face shows its color — a HueForge-style variable-height relief."
-            : "Mosaic: each of the 4 colors is a separate part side by side, all the same thickness — print with 4 filaments on a multi-material printer (Bambu AMS, Prusa MMU, toolchanger)."}
+          {DESCRIPTIONS[props.mode]}
         </p>
       </div>
 
@@ -99,8 +110,25 @@ export default function Controls(props: {
         unit=" mm"
         onChange={props.onWidthMm}
       />
+      {litho && (
+        <Slider
+          label="Min thickness (bright areas)"
+          value={props.minThickness}
+          min={0.4}
+          max={2}
+          step={0.2}
+          unit=" mm"
+          onChange={props.onMinThickness}
+        />
+      )}
       <Slider
-        label={layered ? "Total height (max)" : "Thickness (Z depth)"}
+        label={
+          litho
+            ? "Max thickness (dark areas)"
+            : layered
+              ? "Total height (max)"
+              : "Thickness (Z depth)"
+        }
         value={props.depthMm}
         min={2}
         max={12}
@@ -108,22 +136,23 @@ export default function Controls(props: {
         unit=" mm"
         onChange={props.onDepthMm}
       />
-      {layered && (
-        <Slider
-          label="Print layer height"
-          value={props.layerHeight}
-          min={0.08}
-          max={0.3}
-          step={0.04}
-          unit=" mm"
-          onChange={props.onLayerHeight}
-        />
-      )}
-      {layered && (
-        <p className="text-xs leading-relaxed text-zinc-500">
-          Band boundaries are snapped to whole print layers — slice with the
-          same layer height you set here.
-        </p>
+      {(layered || litho) && (
+        <>
+          <Slider
+            label="Print layer height"
+            value={props.layerHeight}
+            min={0.08}
+            max={0.3}
+            step={0.04}
+            unit=" mm"
+            onChange={props.onLayerHeight}
+          />
+          <p className="text-xs leading-relaxed text-zinc-500">
+            {litho
+              ? "Thickness steps snap to whole print layers — slice with this layer height for clean level changes."
+              : "Band boundaries snap to whole print layers — slice with the same layer height you set here."}
+          </p>
+        </>
       )}
     </div>
   );

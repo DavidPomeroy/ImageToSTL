@@ -1,8 +1,8 @@
 # Image → 4-Color 3D Print
 
-A small Next.js web app that turns any uploaded image into a **flat, 4-color,
-3D-printable plate** (default **5 mm thick**) — ready for multi-material FDM
-printers (Bambu Lab AMS, Prusa MMU, toolchangers, …).
+A small Next.js web app that turns any uploaded image into a **3D-printable
+plate** (default **5 mm thick**) — as a flat 4-color multi-material mosaic,
+a HueForge-style layered relief, or a single-filament lithophane.
 
 Everything runs **client-side in the browser**: no server, no uploads.
 
@@ -17,8 +17,10 @@ Everything runs **client-side in the browser**: no server, no uploads.
    (`lib/quantize.ts`). You can click any swatch to match the palette to
    your actual filaments; pixels are re-assigned to the nearest color.
 4. **Mesh generation** — same-color pixel runs are merged into rectangles,
-   each extruded into a box prism from z = 0 to the chosen depth
-   (`lib/mesh.ts`). This keeps triangle counts far below one-box-per-pixel.
+   each extruded into a box prism over its Z band (`lib/mesh.ts`). In
+   lithophane mode, pixels are grouped by layer-snapped thickness and each
+   level is extruded to its own height. Rect merging keeps triangle counts
+   far below one-box-per-pixel.
 5. **Export** (`lib/exporters.ts`):
    - **3MF** — one file containing 4 parts (one per color) with
      `basematerials` display colors. Open in Bambu Studio / PrusaSlicer,
@@ -41,6 +43,12 @@ chosen print layer height, and the app shows you exactly where to swap
 filaments ("swap at z = 1.2, 2.6, 3.8 mm · layers 7, 13, 20"), mirroring
 HueForge's swap instructions. Slice with the same layer height you selected
 in the app.
+
+**Lithophane (backlit, single filament)** — thickness encodes brightness:
+dark pixels print thick, bright pixels thin (adjustable min/max, e.g.
+0.8–5 mm). Every thickness step snaps to a whole print layer. Export is a
+single part (3MF or STL). Print flat with the relief side up in white or
+natural PLA, high infill, then hold it in front of a light.
 
 ## Run it
 
@@ -90,3 +98,6 @@ scripts/           core-logic test
 - For truer HueForge color blending, pick filaments by their Transmission
   Distance (TD) and order the stack dark → light (the auto-detected palette
   is already sorted that way).
+- Lithophanes: white/natural PLA works best; more perimeters or 100% infill
+  gives the most even light diffusion. Higher pixel resolution = finer
+  detail (and bigger files).

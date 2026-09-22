@@ -200,6 +200,60 @@ check(
   `mosaic per-color coverage 16,15,16,16 (got ${mosaicAreas.join(",")})`
 );
 
+console.log("lithophane mode:");
+const GW = 16,
+  GH = 16;
+const gdata = new Uint8ClampedArray(GW * GH * 4);
+for (let y = 0; y < GH; y++) {
+  for (let x = 0; x < GW; x++) {
+    const o = (y * GW + x) * 4;
+    const g = x * 17; // horizontal gray gradient 0..255
+    gdata[o] = g;
+    gdata[o + 1] = g;
+    gdata[o + 2] = g;
+    gdata[o + 3] = 255;
+  }
+}
+gdata[3] = 0; // transparent at (0,0)
+const gImage = { data: gdata, width: GW, height: GH } as unknown as ImageData;
+const litho = processImageData(gImage, [], 80, 4, "lithophane", 0.2, 0.8);
+
+check(litho.meshes.length === 1, "lithophane produces a single part");
+const lhGrid = litho.heights!;
+check(lhGrid[0] === 0, "transparent pixel has no geometry");
+check(
+  Array.from(lhGrid).every(
+    (h) => h === 0 || Math.abs(h / 0.2 - Math.round(h / 0.2)) < 1e-4
+  ),
+  "all heights snap to whole print layers"
+);
+const hAt = (x: number, y: number) => lhGrid[y * GW + x];
+let monotone = true;
+for (let x = 1; x < GW; x++) {
+  if (hAt(x, 5) > hAt(x - 1, 5) + 1e-6) monotone = false;
+}
+check(monotone, "brighter pixels are never thicker (monotone gradient)");
+check(
+  Math.abs(hAt(0, 5) - 4) < 1e-4 && Math.abs(hAt(15, 5) - 0.8) < 1e-4,
+  `black -> max 4.0mm, white -> min 0.8mm (got ${hAt(0, 5).toFixed(2)}, ${hAt(15, 5).toFixed(2)})`
+);
+check(Math.abs(litho.depthMm - 4) < 1e-4, "effective depth = 4 mm");
+const lithoBoxCount = litho.meshes[0].boxCount ?? 0;
+check(
+  lithoBoxCount > 0 && lithoBoxCount <= 16,
+  `column-uniform heights merge into <= 16 boxes (got ${lithoBoxCount})`
+);
+const lithoPositions = litho.meshes[0].positions!;
+check(
+  lithoPositions.length > 0 && lithoPositions.length % 9 === 0,
+  "lithophane positions valid"
+);
+const lithoZs = lithoPositions.filter((_, i) => i % 3 === 2);
+check(
+  lithoZs.every((z) => z >= 0 && z <= 4 + 1e-4),
+  "lithophane z within [0, 4]"
+);
+
 console.log("3MF:");
 async function main() {
   const blob = await build3MF(parts);
@@ -223,6 +277,23 @@ async function main() {
   check(
     (lmodel.match(/<object /g) || []).length === 4,
     "layered 3MF has 4 objects"
+  );
+
+  const lithoBlob = await build3MF(meshPartPositions(litho));
+  const lithoZip = await JSZip.loadAsync(await lithoBlob.arrayBuffer());
+  const lithoModel = await lithoZip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (lithoModel.match(/<object /g) || []).length === 1,
+    "lithophane 3MF has 1 object"
+  );
+  check(
+    (lithoModel.match(/<base /g) || []).length === 1,
+    "lithophane 3MF has 1 basematerial"
+  );
+  const lithoStl = buildSTL(lithoPositions);
+  check(
+    lithoStl.byteLength === 84 + (lithoPositions.length / 9) * 50,
+    "lithophane STL size matches triangle count"
   );
 
   console.log("STL zip:");

@@ -113,12 +113,13 @@ export default function Preview3D({
     disposeGroup(group);
 
     for (const part of processed.meshes) {
-      if (part.boxes.length === 0) continue;
+      if (part.boxes.length === 0 && !(part.positions && part.positions.length > 0))
+        continue;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute(
         "position",
         new THREE.BufferAttribute(
-          new Float32Array(meshPositions(part.boxes, part.z0, part.z1)),
+          new Float32Array(part.positions ?? meshPositions(part.boxes, part.z0, part.z1)),
           3
         )
       );

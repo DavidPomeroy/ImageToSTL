@@ -17,11 +17,13 @@ Everything runs **client-side in the browser**: no server, no uploads.
 3. **Quantize to 4 colors** — median-cut + farthest-point seeded k-means
    (`lib/quantize.ts`). You can click any swatch to match the palette to
    your actual filaments; pixels are re-assigned to the nearest color.
-4. **Mesh generation** — same-color pixel runs are merged into rectangles,
-   each extruded into a box prism over its Z band (`lib/mesh.ts`). In
-   lithophane mode, pixels are grouped by layer-snapped thickness and each
-   level is extruded to its own height. Rect merging keeps triangle counts
-   far below one-box-per-pixel.
+4. **Mesh generation** — each color part becomes a manifold heightfield:
+   top/bottom sheets per cell plus side faces only where the solid ends or
+   the Z range changes (`lib/mesh.ts`), so every mesh edge is shared by
+   exactly two triangles. In lithophane mode, pixels are grouped by
+   layer-snapped thickness and each level is extruded to its own height.
+   With a shape selected, the mesh is clipped to the exact silhouette so the
+   outline is smooth rather than pixel-stepped (see *Smooth shape edges*).
 5. **Export** (`lib/exporters.ts`):
    - **3MF** — one file containing 4 parts (one per color) with a
      `m:colorgroup` (3MF materials extension) carrying the filament colors.
@@ -129,8 +131,22 @@ frame around the image). Border rendering per mode:
 - Lithophane: maximum thickness (darkest backlit)
 - CMYK: solid dark (full CMY + max white)
 
-Meshes stay manifold — diagonal pinch points (thin diagonal connections)
-are nudged by one pixel where needed, invisible at print scale.
+### Smooth shape edges
+
+The shape outline is not rasterised: the pixel grid is refined 2-4x along the
+shape boundary and boundary vertices are snapped onto the **exact analytic
+silhouette** (nearest point on the polygon/curve). Straight edges come out
+perfectly straight and circular/curved edges follow the true curve instead of
+a blocky pixel staircase — the mesh never protrudes past the true outline
+(worst case a small under-shoot where the boundary runs tangentially to the
+grid). Every part clips to the same silhouette, so multi-colour plates still
+tile with no gaps or overlaps.
+
+Meshes stay manifold — diagonal pinch points (thin diagonal connections),
+z-saddle corners (two diagonal cells of different heights touching along an
+edge) and near-coincident layers are repaired by sub-pixel nudges, invisible
+at print scale. The test suite sweeps randomised noise images across every
+mode, shape, size and curvature to keep that guarantee.
 
 ## Curvature
 

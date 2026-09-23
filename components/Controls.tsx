@@ -192,7 +192,9 @@ export default function Controls(props: {
               />
             </div>
             <p className="text-xs leading-relaxed text-zinc-500">
-              Click or drag on the preview to position the shape.
+              Click or drag on the preview to position the shape. The outline
+              is cut along the exact shape, so straight sides and curves come
+              out smooth — not stepped along the pixel grid.
             </p>
           </>
         )}

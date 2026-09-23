@@ -430,6 +430,180 @@ check(
   check(bad === 0, `heart lithophane manifold (${bad} bad edges)`);
 }
 
+// smooth silhouette: shape edges follow the true geometry, not a pixel
+// staircase
+{
+  // circle mosaic: no mesh vertex may protrude outside the true circle, and
+  // a good number of vertices must sit exactly on it (blocky approximations
+  // put vertices up to ~0.5px outside and only corners near the boundary)
+  const shaped = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    { shape: { type: "circle", cx: 0.5, cy: 0.5, size: 1 } }
+  );
+  const ps = 40 / 8; // pixel size, mm
+  const rmm = 4 * ps; // circle radius in mm
+  let maxOut = 0;
+  let onCircle = 0;
+  const seen = new Set<string>();
+  for (const m of shaped.meshes) {
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const X = m.positions[i];
+      const Y = m.positions[i + 1];
+      const k = X.toFixed(4) + "," + Y.toFixed(4);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const d = Math.hypot(X - 4 * ps, 8 * ps - Y - 4 * ps);
+      maxOut = Math.max(maxOut, d - rmm);
+      if (Math.abs(d - rmm) < 0.05 * ps) onCircle++;
+    }
+  }
+  check(
+    maxOut <= 0.2 * ps,
+    `circle silhouette never protrudes the true circle (max ${maxOut.toFixed(3)}mm, tol ${(0.2 * ps).toFixed(2)}mm)`
+  );
+  check(onCircle >= 16, `circle silhouette follows the curve (${onCircle} vertices on the boundary)`);
+}
+
+// sharp and concave shapes stay manifold through the pipeline
+for (const t of ["triangle", "hexagon", "star", "heart"] as const) {
+  const proc = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    { shape: { type: t, cx: 0.5, cy: 0.5, size: 1 } }
+  );
+  for (const m of proc.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `${t} mosaic ${m.name}: manifold (${bad} bad edges)`);
+  }
+  // lithophane (smooth relief path) too
+  const litho = processImageData(
+    gImage,
+    [],
+    80,
+    4,
+    "lithophane",
+    0.2,
+    0.8,
+    undefined,
+    true,
+    { shape: { type: t, cx: 0.5, cy: 0.5, size: 1 } }
+  );
+  const bad = countNonManifoldEdges(litho.meshes[0].positions);
+  check(bad === 0, `${t} smooth lithophane: manifold (${bad} bad edges)`);
+}
+
+// adversarial geometry sweep: random noise images, random shapes/positions,
+// all print modes and both relief modes. Every part of every plate must stay
+// manifold (no boundary/over-connected edges) — this is what catches pinches,
+// z-saddle corners and degenerate fine cells at shape edges.
+console.log("randomised plate sweep:");
+{
+  let rng = 987654321;
+  const rnd = () =>
+    (rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const shapeTypes = [
+    "circle",
+    "triangle",
+    "hexagon",
+    "star",
+    "heart",
+    "square",
+  ] as const;
+  const modes = ["mosaic", "layered", "lithophane", "cmyk"] as const;
+  const sweepPalette: RGB[] = [
+    [30, 30, 30],
+    [200, 40, 40],
+    [40, 200, 60],
+    [240, 240, 235],
+  ];
+  let configs = 0;
+  let badMeshes = 0;
+  for (let iter = 0; iter < 24; iter++) {
+    const W = 8 + Math.floor(rnd() * 32);
+    const H = 8 + Math.floor(rnd() * 32);
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    const transparency = rnd();
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const o = (y * W + x) * 4;
+        pixels[o] = rnd() * 255;
+        pixels[o + 1] = rnd() * 255;
+        pixels[o + 2] = rnd() * 255;
+        // mix opaque, checkerboard cut-outs and scattered transparent pixels
+        pixels[o + 3] =
+          transparency < 0.2
+            ? (x + y) % 2
+              ? 255
+              : 0
+            : transparency < 0.4
+              ? rnd() < 0.15
+                ? 0
+                : 255
+              : 255;
+      }
+    }
+    const image = { data: pixels, width: W, height: H } as unknown as ImageData;
+    const type = shapeTypes[Math.floor(rnd() * shapeTypes.length)];
+    const mode = modes[Math.floor(rnd() * modes.length)];
+    const smooth = rnd() < 0.5;
+    const curve = rnd() < 0.25 ? rnd() * 180 : 0;
+    const border = rnd() < 0.4 ? rnd() * 3 : 0;
+    configs++;
+    const proc = processImageData(
+      image,
+      sweepPalette,
+      100,
+      5,
+      mode,
+      0.2,
+      0.8,
+      { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 },
+      smooth,
+      {
+        shape: {
+          type,
+          cx: 0.15 + rnd() * 0.7,
+          cy: 0.15 + rnd() * 0.7,
+          size: 0.3 + rnd() * 1.1,
+        },
+        borderMm: border,
+      },
+      curve
+    );
+    for (const m of proc.meshes) {
+      const bad = countNonManifoldEdges(m.positions);
+      if (bad > 0) {
+        badMeshes++;
+        if (badMeshes <= 3) {
+          console.error(
+            `  FAIL - sweep ${iter} (${type} ${mode} smooth=${smooth} curve=${curve.toFixed(0)} border=${border.toFixed(1)} ${W}x${H}) ${m.name}: ${bad} bad edges`
+          );
+        }
+      }
+      if (!m.positions.every(Number.isFinite)) {
+        badMeshes++;
+        console.error(`  FAIL - sweep ${iter} ${m.name}: non-finite coordinates`);
+      }
+    }
+  }
+  check(badMeshes === 0, `${configs} randomised plates are manifold (${badMeshes} bad meshes)`);
+}
+
 console.log("curvature:");
 // radius math
 check(curveRadius(100, 0) === Infinity, "flat -> infinite radius");

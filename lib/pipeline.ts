@@ -28,9 +28,18 @@ import {
 } from "./quantize";
 import {
   buildHeightfieldGeometry,
+  buildShapeClippedGeometry,
   buildSmoothHeightfieldGeometry,
+  makeFineShapeGrid,
+  quantizeZ,
+  repairDiagonalZContacts,
+  type FineShapeGrid,
 } from "./mesh";
-import { classifyPixels, type ShapeParams } from "./shapes";
+import {
+  classifyPixels,
+  makeShapeSilhouette,
+  type ShapeParams,
+} from "./shapes";
 import { bendPositions, shiftZ } from "./curve";
 
 export type PrintMode = "mosaic" | "layered" | "lithophane" | "cmyk";
@@ -308,8 +317,40 @@ export function processImageData(
   const n = gw * gh;
   const pixelSize = widthMm / gw;
 
-  // shape mask / border classification (0 = outside, 1 = border, 2 = inside)
+  // Smooth silhouette: clip the mesh to the exact shape boundary so edges are
+  // true lines/curves instead of a pixel staircase. The fine grid is shared
+  // by every part so all parts clip to the same silhouette. Resolution is
+  // capped so huge images don't blow up mesh build time.
   const shape = shapeOpts?.shape;
+  let fine: FineShapeGrid | null = null;
+  if (shape) {
+    // Fine cells per pixel edge, capped so huge images stay snappy: the
+    // silhouette only needs refinement along its ~1px boundary band, but
+    // the fine grid covers the whole plate, so keep total fine cells in
+    // check (sub=4 => 16x the per-pixel geometry).
+    const sub = Math.max(
+      1,
+      Math.min(4, Math.floor(Math.sqrt(750_000 / (gw * gh))))
+    );
+    fine = makeFineShapeGrid(makeShapeSilhouette(shape, gw, gh), gw, gh, sub);
+  }
+  // A pixel contributes material when any of its fine cells is inside the
+  // shape — exactly matching the mesh clip, so the silhouette never has
+  // notches and boundary slivers always carry a colour/height.
+  const pixelIntersects = fine
+    ? (x: number, y: number): boolean => {
+        const s = fine!.sub;
+        const row0 = y * s * fine!.fw + x * s;
+        for (let k = 0; k < s * s; k++) {
+          if (fine!.inside[row0 + ((k / s) | 0) * fine!.fw + (k % s)]) {
+            return true;
+          }
+        }
+        return false;
+      }
+    : undefined;
+
+  // shape mask / border classification (0 = outside, 1 = border, 2 = inside)
   const borderMm = shapeOpts?.borderMm ?? 0;
   const cls =
     shape || borderMm > 0
@@ -317,9 +358,34 @@ export function processImageData(
           gw,
           gh,
           shape ?? { type: "rectangle", cx: 0.5, cy: 0.5, size: 1 },
-          borderMm / pixelSize
+          borderMm / pixelSize,
+          pixelIntersects
         )
       : null;
+  const buildMesh = (
+    z0sIn: Float32Array,
+    z1sIn: Float32Array,
+    useSmooth = smooth
+  ): number[] => {
+    // Flat per-pixel builds get the diagonal z-contact repair (no shape:
+    // the clipped builder repairs its own fine grid internally). Copy first
+    // so caller-owned arrays (e.g. the lithophane heights used by the 2D
+    // preview) are never mutated.
+    let z0s = z0sIn;
+    let z1s = z1sIn;
+    if (!fine && !useSmooth) {
+      z0s = Float32Array.from(z0sIn);
+      z1s = Float32Array.from(z1sIn);
+      quantizeZ(z0s);
+      quantizeZ(z1s);
+      repairDiagonalZContacts(z0s, z1s, gw, gh);
+    }
+    return fine
+      ? buildShapeClippedGeometry(z0s, z1s, gw, gh, pixelSize, fine, useSmooth)
+      : useSmooth
+        ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
+        : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize);
+  };
 
   // ---- CMYK lithophane: C/M/Y color layers + white relief, 4 parts
   if (mode === "cmyk") {
@@ -391,9 +457,7 @@ export function processImageData(
         pixelCount: count,
         z0: 0,
         z1: maxZ,
-        positions: smooth
-          ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
-          : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
+        positions: buildMesh(z0s, z1s),
       });
     }
 
@@ -447,9 +511,7 @@ export function processImageData(
       pixelCount: opaque,
       z0: 0,
       z1: maxMm,
-      positions: smooth
-        ? buildSmoothHeightfieldGeometry(z0s, heights, gw, gh, pixelSize)
-        : buildHeightfieldGeometry(z0s, heights, gw, gh, pixelSize),
+      positions: buildMesh(z0s, heights),
     };
     if (curveDeg > 0.01) {
       const minZ = bendPositions(mesh.positions, widthMm, curveDeg);
@@ -547,7 +609,7 @@ export function processImageData(
         pixelCount: count,
         z0: bands[i].z0,
         z1: bands[i].z1,
-        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
+        positions: buildMesh(z0s, z1s, false),
       };
     });
   } else {
@@ -573,7 +635,7 @@ export function processImageData(
         pixelCount: count,
         z0: 0,
         z1: depthMm,
-        positions: buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize),
+        positions: buildMesh(z0s, z1s, false),
       };
     });
   }

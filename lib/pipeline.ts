@@ -328,9 +328,16 @@ export function processImageData(
     // silhouette only needs refinement along its ~1px boundary band, but
     // the fine grid covers the whole plate, so keep total fine cells in
     // check (sub=4 => 16x the per-pixel geometry).
+    // Budget the refinement across all colour parts (lithophane is a single
+    // part, everything else has four), so the total triangle count stays in
+    // the low millions even at the highest resolutions.
+    const parts = mode === "lithophane" ? 1 : 4;
     const sub = Math.max(
       1,
-      Math.min(4, Math.floor(Math.sqrt(750_000 / (gw * gh))))
+      Math.min(
+        4,
+        Math.floor(Math.sqrt(1_200_000 / (parts * gw * gh)))
+      )
     );
     fine = makeFineShapeGrid(makeShapeSilhouette(shape, gw, gh), gw, gh, sub);
   }

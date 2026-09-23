@@ -257,44 +257,6 @@ export function makeFineShapeGrid(
 }
 
 /**
- * Shape-clipped heightfield mesh with analytic (smooth) silhouette edges.
- *
- * Every pixel cell is refined into `sub` x `sub` fine cells; a fine cell is
- * solid only if its parent pixel is solid AND its center lies inside the
- * shape. Vertices whose surrounding fine cells straddle the shape boundary
- * are then snapped onto the exact silhouette, so straight shape edges are
- * perfectly straight and curved edges follow the true curve (at the fine
- * grid's vertex density) instead of a one-pixel staircase.
- *
- * The same fine grid and the same deterministic snap rule are used for every
- * color part, so parts continue to tile side by side with no gaps or overlaps
- * and the mesh stays manifold by construction.
- *
- * `smooth` bilinearly interpolates the top/bottom z sheets between pixel
- * centers (relief smoothing); otherwise z is flat per pixel and side walls
- * are split at every z level present in the part, keeping vertically stacked
- * parts manifold.
- */
-/**
- * Shape-clipped heightfield mesh with analytic (smooth) silhouette edges.
- *
- * Every pixel cell is refined into `sub` x `sub` fine cells; a fine cell is
- * solid only if its parent pixel is solid AND its center lies inside the
- * shape. Vertices whose surrounding fine cells straddle the shape boundary
- * are then snapped onto the exact silhouette, so straight shape edges are
- * perfectly straight and curved edges follow the true curve (at the fine
- * grid's vertex density) instead of a one-pixel staircase.
- *
- * The same fine grid and the same deterministic snap rule are used for every
- * color part, so parts continue to tile side by side with no gaps or overlaps
- * and the mesh stays manifold by construction.
- *
- * `smooth` bilinearly interpolates the top/bottom z sheets between pixel
- * centers (relief smoothing); otherwise z is flat per pixel and side walls
- * are split at every z level present in the part, keeping vertically stacked
- * parts manifold.
- */
-/**
  * Snap per-cell z values to a 1e-6 mm (1 nanometre) grid, in place.
  *
  * Print-layer z values are computed with different expression orders per
@@ -311,6 +273,25 @@ export function quantizeZ(z: Float32Array | number[]): void {
   }
 }
 
+/**
+ * Shape-clipped heightfield mesh with analytic (smooth) silhouette edges.
+ *
+ * Every pixel cell is refined into `sub` x `sub` fine cells; a fine cell is
+ * solid only if its parent pixel is solid AND its center lies inside the
+ * shape. Vertices whose surrounding fine cells straddle the shape boundary
+ * are then snapped onto the exact silhouette, so straight shape edges are
+ * perfectly straight and curved edges follow the true curve (at the fine
+ * grid's vertex density) instead of a one-pixel staircase.
+ *
+ * The same fine grid and the same deterministic snap rule are used for every
+ * color part, so parts continue to tile side by side with no gaps or overlaps
+ * and the mesh stays manifold by construction.
+ *
+ * `smooth` bilinearly interpolates the top/bottom z sheets between pixel
+ * centers (relief smoothing); otherwise z is flat per pixel and side walls
+ * are split at every z level present in the part, keeping vertically stacked
+ * parts manifold.
+ */
 export function buildShapeClippedGeometry(
   z0s: Float32Array | number[],
   z1s: Float32Array | number[],
@@ -402,6 +383,9 @@ export function buildShapeClippedGeometry(
   const fz1 = new Float32Array(fw * fh);
   let cuts: number[] = [];
   if (!smooth) {
+    let fz0A = 0;
+    let fz1A = 0;
+    let haveA = false;
     for (let fy = 0; fy < fh; fy++) {
       for (let fx = 0; fx < fw; fx++) {
         const i = fy * fw + fx;
@@ -410,12 +394,24 @@ export function buildShapeClippedGeometry(
         const pi = fillFrom[i] >= 0 ? fillFrom[i] : parentIndexOfFine(i);
         fz0[i] = z0s[pi];
         fz1[i] = z1s[pi];
+        if (!haveA) {
+          fz0A = fz0[i];
+          fz1A = fz1[i];
+          haveA = true;
+        }
       }
     }
     // nanometre snap (see quantizeZ) so float noise in layer maths cannot
     // create hairline wall strips; cuts then come from the snapped values
     quantizeZ(fz0);
     quantizeZ(fz1);
+    // A part whose cells all share one z interval cannot form a z saddle
+    // (mosaic and layered plates), so skip that scan entirely.
+    let uniformZ = true;
+    for (let i = 0; i < fz0.length && uniformZ; i++) {
+      if (state[i] !== 1) continue;
+      if (fz0[i] !== fz0A || fz1[i] !== fz1A) uniformZ = false;
+    }
     const cutSet = new Set<number>();
     for (let i = 0; i < fz0.length; i++) {
       if (fz1[i] > fz0[i] + 1e-9) {
@@ -428,20 +424,26 @@ export function buildShapeClippedGeometry(
     // touch along a vertex line (edge-non-manifold). Cells that had no
     // material become solid, inheriting the diagonal neighbour's z range, so
     // they are marked before vertices are positioned.
-    repairDiagonalZContacts(fz0, fz1, fw, fh, (idx, from) => {
-      state[idx] = 1;
-      fillFrom[idx] =
-        fillFrom[from] >= 0 ? fillFrom[from] : parentIndexOfFine(from);
-    });
+    if (!uniformZ) {
+      repairDiagonalZContacts(fz0, fz1, fw, fh, (idx, from) => {
+        state[idx] = 1;
+        fillFrom[idx] =
+          fillFrom[from] >= 0 ? fillFrom[from] : parentIndexOfFine(from);
+      });
+    }
   }
 
-  // Vertex XY: fine grid positions, with silhouette-straddling vertices
-  // snapped onto the exact shape boundary (guard against pathological
-  // projections: never move further than ~1.5 fine cells). A vertex snaps
-  // when its surrounding fine cells straddle the silhouette (membership
-  // differs and at least one is solid), or when the vertex itself sits just
-  // outside the shape while all its neighbouring cell centers are inside
-  // (near-tangent spots where a corner pokes out).
+  // Vertex XY: fine grid positions, with boundary vertices snapped onto the
+  // exact shape silhouette (guard against pathological projections: never
+  // move further than ~1.5 fine cells). A vertex that carries material
+  // snaps when
+  //   - its neighbouring fine cells straddle the silhouette, or
+  //   - it is outside the shape itself — including the corners of
+  //     pinch-filled cells whose whole neighbourhood is outside, which would
+  //     otherwise poke out past the outline.
+  // The exact test is only run near the silhouette (a dilated band, plus the
+  // image rim where tangent boundaries can run parallel to the grid), so
+  // interior vertices cost nothing even for many-edge shapes.
   const posX = new Float64Array(vw * vh);
   const posY = new Float64Array(vw * vh);
   const gridX = new Float64Array(vw * vh);
@@ -473,16 +475,23 @@ export function buildShapeClippedGeometry(
       }
       const px = vx / sub;
       const py = vy / sub;
+      // On the image rim the silhouette can run almost parallel to the grid,
+      // so the dilation band may not reach the outside cells; those vertices
+      // are few, so always run the exact test there.
+      const onRim = vx === 0 || vy === 0 || vx === fw || vy === vh - 1;
       let doSnap = false;
       if (solidCount > 0) {
         if (silInCount > 0 && silInCount < silTotal) {
-          doSnap = true; // straddling vertex
+          // straddling vertex: part of the neighbourhood lies outside the shape
+          doSnap = true;
         } else if (
-          silInCount === silTotal &&
-          nearOut &&
-          !fine.testInside(px, py)
+          (nearOut || onRim) &&
+          // vertex outside the shape while carrying material: either every
+          // neighbouring cell center is outside (pinch-filled corner cells)
+          // or the vertex itself is just past the boundary.
+          (silInCount === 0 || !fine.testInside(px, py))
         ) {
-          doSnap = true; // corner just outside the shape, cell centers all in
+          doSnap = true;
         }
       }
       if (doSnap) {

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Dropzone from "@/components/Dropzone";
 import Controls from "@/components/Controls";
 import PaletteEditor from "@/components/PaletteEditor";
 import Preview2D from "@/components/Preview2D";
+import { LoadingOverlay, Spinner } from "@/components/Spinner";
 import {
   downscaleImageData,
   meshPartPositions,
@@ -71,6 +72,20 @@ export default function Home() {
   const [curveDeg, setCurveDeg] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
 
+  // Regenerating the plate after a settings change is heavy (quantization +
+  // mesh building), so it is computed asynchronously with a loading indicator
+  // instead of synchronously freezing the UI during render.
+  const [processed, setProcessed] = useState<ProcessedImage | null>(null);
+  const [exportParts, setExportParts] = useState<
+    ReturnType<typeof meshPartPositions>
+  >([]);
+  /** True from the moment settings change until the new model is ready. */
+  const [processing, setProcessing] = useState(false);
+  /** The overlay/spinner only appears if processing outlasts a short grace
+   *  period, so snappy recalculations don't flash a loading state. */
+  const [showLoading, setShowLoading] = useState(false);
+  const processingRun = useRef(0);
+
   const debouncedResolution = useDebouncedValue(resolution, 150);
   const shapePos = useMemo(() => ({ cx: shapeCx, cy: shapeCy }), [shapeCx, shapeCy]);
   const debouncedShapePos = useDebouncedValue(shapePos, 120);
@@ -106,11 +121,42 @@ export default function Home() {
     if (imageData) setPalette(autoPalette(collectPixels(imageData.data), 4));
   }, [imageData]);
 
-  const processed: ProcessedImage | null = useMemo(
-    () =>
-      imageData &&
-      (mode === "lithophane" || mode === "cmyk" || palette.length > 0)
-        ? processImageData(imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, {
+  useEffect(() => {
+    if (
+      !imageData ||
+      !(mode === "lithophane" || mode === "cmyk" || palette.length > 0)
+    ) {
+      setProcessed(null);
+      setExportParts([]);
+      setProcessing(false);
+      setShowLoading(false);
+      return;
+    }
+    // Cancel any in-flight run: stale results are discarded via the run id.
+    const runId = ++processingRun.current;
+    setProcessing(true);
+
+    // Show the loading indicator only if the regeneration is still running
+    // after a short grace period (avoids spinner flashing on fast recalcs).
+    const spinnerTimer = setTimeout(() => {
+      if (processingRun.current === runId) setShowLoading(true);
+    }, 120);
+
+    // Give the browser a moment to paint the spinner (and coalesce rapid
+    // slider changes) before the heavy synchronous work blocks the thread.
+    const workTimer = setTimeout(() => {
+      if (processingRun.current !== runId) return;
+      requestAnimationFrame(() => {
+        if (processingRun.current !== runId) return;
+        const p = processImageData(
+          imageData,
+          palette,
+          widthMm,
+          depthMm,
+          mode,
+          layerHeight,
+          minThickness,
+          {
             colorLayers,
             whiteMinLayers,
             whiteMaxLayers,
@@ -128,18 +174,41 @@ export default function Home() {
                   },
             borderMm,
           },
-          curveDeg)
-        : null,
-    [imageData, palette, widthMm, depthMm, mode, layerHeight, minThickness, colorLayers, whiteMinLayers, whiteMaxLayers, smooth, shapeType, debouncedShapePos, shapeSize, borderMm, curveDeg]
-  );
+          curveDeg
+        );
+        if (processingRun.current !== runId) return;
+        setExportParts(
+          meshPartPositions(p).filter((part) => part.positions.length > 0)
+        );
+        setProcessed(p);
+        setProcessing(false);
+        setShowLoading(false);
+      });
+    }, 150);
 
-  const exportParts = useMemo(
-    () =>
-      processed
-        ? meshPartPositions(processed).filter((p) => p.positions.length > 0)
-        : [],
-    [processed]
-  );
+    return () => {
+      clearTimeout(spinnerTimer);
+      clearTimeout(workTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    imageData,
+    palette,
+    widthMm,
+    depthMm,
+    mode,
+    layerHeight,
+    minThickness,
+    colorLayers,
+    whiteMinLayers,
+    whiteMaxLayers,
+    smooth,
+    shapeType,
+    debouncedShapePos,
+    shapeSize,
+    borderMm,
+    curveDeg,
+  ]);
   const hasGeometry = exportParts.length > 0;
   const fileBase =
     mode === "cmyk"
@@ -208,9 +277,12 @@ export default function Home() {
             </section>
 
             <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                2 · Print settings
-              </h2>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+                  2 · Print settings
+                </h2>
+                {processing && <Spinner label="Updating…" />}
+              </div>
               <Controls
                 mode={mode}
                 resolution={resolution}
@@ -316,6 +388,19 @@ export default function Home() {
           <section className="min-w-0 space-y-6">
             {!processed || !hasGeometry ? (
               <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/30 p-10 text-center">
+                {processing ? (
+                  <>
+                    <Spinner label="" />
+                    <h3 className="mt-4 text-lg font-medium text-zinc-300">
+                      Generating your plate…
+                    </h3>
+                    <p className="mt-1 max-w-sm text-sm text-zinc-500">
+                      Downscaling, quantizing to 4 colors and building the
+                      meshes — please wait a moment.
+                    </p>
+                  </>
+                ) : (
+                  <>
                 <svg
                   className="mb-4 h-10 w-10 text-zinc-600"
                   fill="none"
@@ -352,6 +437,8 @@ export default function Home() {
                     (or 4 STLs) and assign filaments in your slicer
                   </li>
                 </ol>
+                  </>
+                )}
               </div>
             ) : (
               <>
@@ -369,7 +456,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+                  <div className="relative rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
                     <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
                       {processed.mode === "lithophane" || processed.mode === "cmyk" ? "Backlit preview" : "Quantized image"} · {processed.gw}×{processed.gh} px
                     </h3>
@@ -400,6 +487,12 @@ export default function Home() {
                         } : undefined
                       }
                     />
+                    {showLoading && (
+                      <LoadingOverlay
+                        title="Regenerating preview…"
+                        hint="Applying your settings — please wait."
+                      />
+                    )}
                     <dl className="mt-3 space-y-1 text-xs">
                       <div className="flex justify-between">
                         <dt className="text-zinc-500">Plate size</dt>
@@ -471,6 +564,12 @@ export default function Home() {
 
                 <div className="relative h-[500px] overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/60 to-zinc-950">
                     <Preview3D processed={processed} fitNonce={fitNonce} />
+                    {showLoading && (
+                      <LoadingOverlay
+                        title="Generating model…"
+                        hint="Rebuilding the meshes for your new settings."
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => setFitNonce((n) => n + 1)}
@@ -507,26 +606,32 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={download3MF}
-                      disabled={busy !== null}
+                      disabled={busy !== null || processing}
+                      title={processing ? "Updating the model with your new settings…" : undefined}
                       className="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy === "3mf"
                         ? "Building 3MF…"
-                        : mode === "lithophane"
-                          ? "Download 3MF"
-                          : "Download 3MF (4 color parts)"}
+                        : processing
+                          ? "Updating model…"
+                          : mode === "lithophane"
+                            ? "Download 3MF"
+                            : "Download 3MF (4 color parts)"}
                     </button>
                     <button
                       type="button"
                       onClick={downloadSTLs}
-                      disabled={busy !== null}
+                      disabled={busy !== null || processing}
+                      title={processing ? "Updating the model with your new settings…" : undefined}
                       className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy === "stl"
                         ? "Building STL…"
-                        : mode === "lithophane"
-                          ? "Download STL"
-                          : "Download STL zip (4 files)"}
+                        : processing
+                          ? "Updating model…"
+                          : mode === "lithophane"
+                            ? "Download STL"
+                            : "Download STL zip (4 files)"}
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-zinc-600">

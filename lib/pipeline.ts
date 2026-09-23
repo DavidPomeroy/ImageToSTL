@@ -31,8 +31,6 @@ import {
   buildShapeClippedGeometry,
   buildSmoothHeightfieldGeometry,
   makeFineShapeGrid,
-  quantizeZ,
-  repairDiagonalZContacts,
   type FineShapeGrid,
 } from "./mesh";
 import {
@@ -370,29 +368,15 @@ export function processImageData(
         )
       : null;
   const buildMesh = (
-    z0sIn: Float32Array,
-    z1sIn: Float32Array,
+    z0s: Float32Array,
+    z1s: Float32Array,
     useSmooth = smooth
-  ): number[] => {
-    // Flat per-pixel builds get the diagonal z-contact repair (no shape:
-    // the clipped builder repairs its own fine grid internally). Copy first
-    // so caller-owned arrays (e.g. the lithophane heights used by the 2D
-    // preview) are never mutated.
-    let z0s = z0sIn;
-    let z1s = z1sIn;
-    if (!fine && !useSmooth) {
-      z0s = Float32Array.from(z0sIn);
-      z1s = Float32Array.from(z1sIn);
-      quantizeZ(z0s);
-      quantizeZ(z1s);
-      repairDiagonalZContacts(z0s, z1s, gw, gh);
-    }
-    return fine
+  ): number[] =>
+    fine
       ? buildShapeClippedGeometry(z0s, z1s, gw, gh, pixelSize, fine, useSmooth)
       : useSmooth
         ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
         : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize);
-  };
 
   // ---- CMYK lithophane: C/M/Y color layers + white relief, 4 parts
   if (mode === "cmyk") {

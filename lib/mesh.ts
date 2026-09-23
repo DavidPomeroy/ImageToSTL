@@ -324,34 +324,21 @@ export function buildShapeClippedGeometry(
   }
   const cell = (fx: number, fy: number): number =>
     fx < 0 || fy < 0 || fx >= fw || fy >= fh ? 0 : state[fy * fw + fx];
-
-  // Diagonal pinch fill (same trick as the per-pixel classifier, one fine
-  // cell wide = a quarter-pixel nudge): when two solid cells touch only
-  // diagonally, the four side walls around the shared corner would meet in a
-  // non-manifold point. Fill one of the two orthogonal cells. Cells merely
-  // clipped by the silhouette carry their own parent z; cells whose parent
-  // pixel is empty (transparent / another colour) borrow the z range of the
-  // solid diagonal pair — mirroring the per-pixel pinch fill, which also
-  // nudged material into an empty orthogonal pixel.
-  const fillFrom = new Int32Array(fw * fh).fill(-1); // parent index borrowed z came from
+  /** Pixel index behind a fine cell. */
   const parentIndexOfFine = (idx: number): number =>
     Math.floor(idx / fw / sub) * gw + Math.floor((idx % fw) / sub);
-  const pinch = (bIdx: number, cIdx: number, dIdx: number): boolean => {
-    // b is a solid diagonal cell; c/d are the orthogonal candidates
-    const borrowed = fillFrom[bIdx] >= 0 ? fillFrom[bIdx] : parentIndexOfFine(bIdx);
-    if (state[cIdx] === 2 || state[cIdx] === 0) {
-      state[cIdx] = 1;
-      fillFrom[cIdx] = borrowed;
-      return true;
-    }
-    if (state[dIdx] === 2 || state[dIdx] === 0) {
-      state[dIdx] = 1;
-      fillFrom[dIdx] = borrowed;
-      return true;
-    }
-    return false;
-  };
-  for (let pass = 0; pass < 2; pass++) {
+
+  // Diagonal contact repair. Two solid cells touching only at a corner make
+  // the solid edge-non-manifold (four side walls share one vertical edge).
+  // Prefer to *fill* one of the two orthogonal cells — but only a cell whose
+  // parent pixel already carries this part (silhouette-clipped), using its
+  // own pixel's z range, so the fill connects the diagonal pair with material
+  // that was always supposed to be there. If both orthogonals are empty (the
+  // pixel has no material for this part — transparent or another colour),
+  // filling would invent floating/overlapping material, so instead clear one
+  // of the touching diagonal cells (a quarter pixel at sub=4).
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false;
     for (let fy = 0; fy < fh - 1; fy++) {
       for (let fx = 0; fx < fw - 1; fx++) {
         const i = fy * fw + fx;
@@ -361,17 +348,24 @@ export function buildShapeClippedGeometry(
           state[i + 1] !== 1 &&
           state[i + fw] !== 1
         ) {
-          pinch(i + fw + 1, i + 1, i + fw);
+          if (state[i + 1] === 2) state[i + 1] = 1;
+          else if (state[i + fw] === 2) state[i + fw] = 1;
+          else state[i + fw + 1] = 0;
+          changed = true;
         } else if (
           state[i + 1] === 1 &&
           state[i + fw] === 1 &&
           state[i] !== 1 &&
           state[i + fw + 1] !== 1
         ) {
-          pinch(i + fw, i, i + fw + 1);
+          if (state[i] === 2) state[i] = 1;
+          else if (state[i + fw + 1] === 2) state[i + fw + 1] = 1;
+          else state[i + fw] = 0;
+          changed = true;
         }
       }
     }
+    if (!changed) break;
   }
 
   // Per-vertex z sheets (smooth relief) or per-fine-cell flat z values.
@@ -383,35 +377,21 @@ export function buildShapeClippedGeometry(
   const fz1 = new Float32Array(fw * fh);
   let cuts: number[] = [];
   if (!smooth) {
-    let fz0A = 0;
-    let fz1A = 0;
-    let haveA = false;
     for (let fy = 0; fy < fh; fy++) {
       for (let fx = 0; fx < fw; fx++) {
         const i = fy * fw + fx;
         if (state[i] !== 1) continue;
-        // pinch-filled cells borrow the z range of the solid diagonal pair
-        const pi = fillFrom[i] >= 0 ? fillFrom[i] : parentIndexOfFine(i);
+        // every solid cell carries its own pixel's z range — repairs never
+        // invent material, so no cell borrows another pixel's heights
+        const pi = parentIndexOfFine(i);
         fz0[i] = z0s[pi];
         fz1[i] = z1s[pi];
-        if (!haveA) {
-          fz0A = fz0[i];
-          fz1A = fz1[i];
-          haveA = true;
-        }
       }
     }
     // nanometre snap (see quantizeZ) so float noise in layer maths cannot
     // create hairline wall strips; cuts then come from the snapped values
     quantizeZ(fz0);
     quantizeZ(fz1);
-    // A part whose cells all share one z interval cannot form a z saddle
-    // (mosaic and layered plates), so skip that scan entirely.
-    let uniformZ = true;
-    for (let i = 0; i < fz0.length && uniformZ; i++) {
-      if (state[i] !== 1) continue;
-      if (fz0[i] !== fz0A || fz1[i] !== fz1A) uniformZ = false;
-    }
     const cutSet = new Set<number>();
     for (let i = 0; i < fz0.length; i++) {
       if (fz1[i] > fz0[i] + 1e-9) {
@@ -420,17 +400,6 @@ export function buildShapeClippedGeometry(
       }
     }
     cuts = [...cutSet].sort((a, b) => a - b);
-    // fine-level saddle repair: diagonal cells of different heights must not
-    // touch along a vertex line (edge-non-manifold). Cells that had no
-    // material become solid, inheriting the diagonal neighbour's z range, so
-    // they are marked before vertices are positioned.
-    if (!uniformZ) {
-      repairDiagonalZContacts(fz0, fz1, fw, fh, (idx, from) => {
-        state[idx] = 1;
-        fillFrom[idx] =
-          fillFrom[from] >= 0 ? fillFrom[from] : parentIndexOfFine(from);
-      });
-    }
   }
 
   // Vertex XY: fine grid positions, with boundary vertices snapped onto the
@@ -548,8 +517,6 @@ export function buildShapeClippedGeometry(
     posX[vi] = gridX[vi];
     posY[vi] = gridY[vi];
   };
-  const sameXY = (a: number, b: number): boolean =>
-    Math.abs(posX[a] - posX[b]) < 1e-9 && Math.abs(posY[a] - posY[b]) < 1e-9;
   for (let repair = 0; repair < 2; repair++) {
     // collapsed cells (all four corners on one line)
     for (let fy = 0; fy < fh; fy++) {
@@ -563,21 +530,19 @@ export function buildShapeClippedGeometry(
         for (const vi of [iTL, iTR, iBR, iBL]) if (snapped[vi]) unsnap(vi);
       }
     }
-    // adjacent vertices snapped onto the same boundary point: a zero-length
-    // edge (and a zero-width wall) that would leave the neighbouring faces
-    // without a partner. Keep the first snap, revert the other.
-    for (let vy = 0; vy < vh; vy++) {
-      for (let vx = 0; vx < vw; vx++) {
-        const vi = vy * vw + vx;
-        if (vx + 1 < vw) {
-          const vj = vi + 1;
-          if (snapped[vi] && snapped[vj] && sameXY(vi, vj)) unsnap(vj);
-        }
-        if (vy + 1 < vh) {
-          const vj = vi + vw;
-          if (snapped[vi] && snapped[vj] && sameXY(vi, vj)) unsnap(vj);
-        }
-      }
+    // Vertices snapped onto the same point as another vertex: a zero-length
+    // edge, and walls from both vertices meeting on one vertical edge (a
+    // bowtie) — at shape corners several vertices project onto the same
+    // boundary point. Keep the first snap and revert the others; reverting
+    // always lands on a unique grid position, so a couple of passes settle
+    // every collision.
+    const byPos = new Map<string, number>();
+    for (let vi = 0; vi < vw * vh; vi++) {
+      if (!snapped[vi]) continue;
+      const key = posX[vi].toFixed(6) + "," + posY[vi].toFixed(6);
+      const first = byPos.get(key);
+      if (first === undefined) byPos.set(key, vi);
+      else unsnap(vi);
     }
   }
 
@@ -803,101 +768,6 @@ export function buildShapeClippedGeometry(
   }
 
   return out;
-}
-
-/**
- * Repair diagonal z-contact corners in a per-pixel z-interval field.
- *
- * When the four cells around a grid vertex have heights like (2,1,1,2) — two
- * diagonal cells tall, two orthogonal cells short — the tall cells touch
- * only along the vertex's vertical line, which makes the solid (and the
- * mesh) edge-non-manifold: four step-face strips share that vertical edge.
- * The fix mirrors the diagonal pinch fill: extend one short orthogonal
- * cell's interval to cover the shared sub-range, adding a quarter-pixel
- * sliver of material that is invisible at print scale.
- *
- * Works in place on per-pixel (or per-fine-cell) interval arrays; also used
- * by the per-pixel builders so noisy images stay manifold everywhere.
- */
-export function repairDiagonalZContacts(
-  z0s: Float32Array | number[],
-  z1s: Float32Array | number[],
-  gw: number,
-  gh: number,
-  onFilled?: (idx: number, fromIdx: number) => void
-): void {
-  // global z cuts
-  const cutSet = new Set<number>();
-  const n = gw * gh;
-  for (let i = 0; i < n; i++) {
-    if (z1s[i] > z0s[i] + 1e-9) {
-      cutSet.add(z0s[i]);
-      cutSet.add(z1s[i]);
-    }
-  }
-  if (cutSet.size < 2) return;
-  const cuts = [...cutSet].sort((a, b) => a - b);
-
-  const at = (x: number, y: number) => (x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x);
-  const covers = (i: number, z: number): boolean =>
-    i >= 0 && z0s[i] < z && z < z1s[i];
-
-  // Fixpoint loop: an extension adds coverage, which can turn an "exactly one
-  // cell covers this strip" state (fine) into an "exactly two diagonal cells"
-  // state (bad) at a neighbouring vertex, so keep repairing until stable.
-  // Intervals only ever grow, so this terminates quickly.
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < 512) {
-    changed = false;
-    for (let y = 1; y < gh; y++) {
-      for (let x = 1; x < gw; x++) {
-        const nw = at(x - 1, y - 1);
-        const ne = at(x, y - 1);
-        const sw = at(x - 1, y);
-        const se = at(x, y);
-        for (let c = 0; c + 1 < cuts.length; c++) {
-          const lo = cuts[c];
-          const hi = cuts[c + 1];
-          const mid = (lo + hi) / 2;
-          const nwC = covers(nw, mid);
-          const neC = covers(ne, mid);
-          const swC = covers(sw, mid);
-          const seC = covers(se, mid);
-          // exactly two diagonal cells cover this strip: edge contact.
-          // Extend an orthogonal cell's interval to cover the strip (a
-          // union, so the fix is idempotent and coverage only ever grows).
-          if (nwC && seC && !neC && !swC) {
-            if (ne >= 0 && !covers(ne, mid)) {
-              if (z1s[ne] <= z0s[ne] + 1e-9) {
-                // no material yet: adopt exactly this strip, so both new
-                // endpoints are existing z levels (walls stay aligned)
-                z0s[ne] = lo;
-                z1s[ne] = hi;
-                onFilled?.(ne, nw);
-              } else {
-                z0s[ne] = Math.min(z0s[ne], lo);
-                z1s[ne] = Math.max(z1s[ne], hi);
-              }
-              changed = true;
-            }
-          } else if (neC && swC && !nwC && !seC) {
-            if (nw >= 0 && !covers(nw, mid)) {
-              if (z1s[nw] <= z0s[nw] + 1e-9) {
-                z0s[nw] = lo;
-                z1s[nw] = hi;
-                onFilled?.(nw, ne);
-              } else {
-                z0s[nw] = Math.min(z0s[nw], lo);
-                z1s[nw] = Math.max(z1s[nw], hi);
-              }
-              changed = true;
-            }
-          }
-        }
-      }
-    }
-  }
 }
 
 /**

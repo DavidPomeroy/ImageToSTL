@@ -150,15 +150,23 @@ tile with no gaps or overlaps.
 
 Meshes stay manifold — diagonal pinch points (thin diagonal connections) and
 near-coincident layers are repaired by sub-pixel nudges, invisible at print
-scale. A diagonal contact is only ever cleared when another part of the plate
-covers the cleared cell, so the repair can never punch a hole in the combined
-plate along the outline; where no other part covers it, the zero-volume
-point contact is left for the slicer's automatic repair, exactly as the
-per-pixel builder always produced. The test suite sweeps randomised noise
+scale. Bambu Studio refuses meshes with 4-way point-contact edges instead of
+silently repairing them, so the diagonal-contact repair fills such contacts
+whenever it can do so without inventing material: from the cell's own pixel,
+or — for silhouette-corner slivers — from the diagonal partner that already
+carries the part. A contact is only ever cleared when another part of the
+plate covers the cleared cell, so the repair can never punch a hole in the
+combined plate along the outline. The test suite sweeps randomised noise
 images across every mode, shape, size and curvature — plus a border-ring
 suite that verifies the ring reaches the silhouette, owns exactly the
 border part(s) per mode, and follows the shape's inward offset — to keep
 those guarantees.
+
+Uniform areas of the top/bottom sheets are emitted as merged runs instead of
+per-fine-cell quads (with per-column break sets so merged faces never leave
+T-junction holes), which typically cuts the triangle count of large plates
+several-fold while keeping full fine resolution along the silhouette, the
+border ring's contour and every relief step.
 
 ## Curvature
 

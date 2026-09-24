@@ -463,19 +463,31 @@ export function buildShapeClippedGeometry(
     Math.floor(idx / fw / sub) * gw + Math.floor((idx % fw) / sub);
 
   // Diagonal contact repair. Two solid cells touching only at a corner make
-  // the solid edge-non-manifold (four side walls share one vertical edge).
+  // the solid edge-non-manifold (four side walls share one vertical edge —
+  // Bambu Studio refuses such meshes instead of silently repairing them).
   // Prefer to *fill* one of the two orthogonal cells — but only a cell whose
   // parent pixel already carries this part (silhouette-clipped), using its
   // own pixel's z range, so the fill connects the diagonal pair with material
-  // that was always supposed to be there. If both orthogonals are empty for
-  // this part, the contact is cleared only when another part of the plate
-  // covers the cleared cell as well (per `othersSolid`): the part stays
-  // manifold and the combined plate keeps its material. Where no other part
-  // covers it, the zero-volume point contact is left as-is — exactly what the
-  // shipped per-pixel builder produced at such corners — because clearing
-  // there would punch a real hole in the plate along the outline.
+  // that was always supposed to be there. If both orthogonals belong to
+  // pixels with no material for this part but lie OUTSIDE the shape, the
+  // fill borrows the diagonal partner's own z range for this part: the
+  // partner carries the part, so nothing is invented across parts or bands,
+  // and the filled sliver is clipped to the silhouette by the boundary
+  // vertex snap. If both orthogonals lie inside the shape, the contact is
+  // cleared only when another part of the plate covers the cleared cell too
+  // (per `othersSolid`): the part stays manifold and the combined plate keeps
+  // its material. Where no other part covers it, the zero-volume point
+  // contact is left as-is — exactly what the shipped per-pixel builder
+  // produced at such corners — because clearing there would punch a real
+  // hole in the plate along the outline.
+  const fillSrc = new Int32Array(fw * fh).fill(-1); // borrowed z donor pixel
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
+    const borrowFill = (cell: number, partner: number) => {
+      state[cell] = 1;
+      fillSrc[cell] = parentIndexOfFine(partner);
+      changed = true;
+    };
     for (let fy = 0; fy < fh - 1; fy++) {
       for (let fx = 0; fx < fw - 1; fx++) {
         const i = fy * fw + fx;
@@ -489,13 +501,13 @@ export function buildShapeClippedGeometry(
           const fillB = state[i + fw] === 2;
           if (fillA) state[i + 1] = 1;
           else if (fillB) state[i + fw] = 1;
+          else if (!fine.inside[i + 1]) borrowFill(i + 1, i);
+          else if (!fine.inside[i + fw]) borrowFill(i + fw, i);
           else {
             const diag = i + fw + 1;
             const diagIsRing = !!ringMask && !!ringMask[diag];
             if (
-              diagIsRing
-                ? ring!.othersOwnRing
-                : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)]
+              (diagIsRing ? ring!.othersOwnRing : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)])
             ) {
               state[diag] = 0;
             }
@@ -511,13 +523,13 @@ export function buildShapeClippedGeometry(
           const fillB = state[i + fw + 1] === 2;
           if (fillA) state[i] = 1;
           else if (fillB) state[i + fw + 1] = 1;
+          else if (!fine.inside[i]) borrowFill(i, i + 1);
+          else if (!fine.inside[i + fw]) borrowFill(i + fw, i + 1);
           else {
             const diag = i + fw;
             const diagIsRing = !!ringMask && !!ringMask[diag];
             if (
-              diagIsRing
-                ? ring!.othersOwnRing
-                : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)]
+              (diagIsRing ? ring!.othersOwnRing : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)])
             ) {
               state[diag] = 0;
             }
@@ -572,8 +584,10 @@ export function buildShapeClippedGeometry(
         const i = fy * fw + fx;
         if (state[i] !== 1) continue;
         // every solid cell carries its own pixel's z range — repairs never
-        // invent material, so no cell borrows another pixel's heights
-        const pi = parentIndexOfFine(i);
+        // invent material, so no cell borrows another pixel's heights (a
+        // silhouette-corner sliver borrows its diagonal partner's range, the
+        // only source that already carries this part)
+        const pi = fillSrc[i] >= 0 ? fillSrc[i] : parentIndexOfFine(i);
         fz0[i] = z0s[pi];
         fz1[i] = z1s[pi];
       }
@@ -829,26 +843,103 @@ export function buildShapeClippedGeometry(
     }
   };
 
-  // top + bottom sheets over solid fine cells
+  // Face-run merging (triangle-count reduction): consecutive solid cells of a
+  // row with identical flat z (or locally constant smooth sheets) and no
+  // snapped corners collapse into one quad pair. A break anywhere in a
+  // column must be mirrored by every row whose faces share that column's
+  // vertical edges, otherwise merged faces leave T-junction holes — so the
+  // per-column break set is the union over ALL rows of that column's
+  // cell-level transitions (z change, solidity change, snapped corner).
+  // Rows merge only between break columns; the silhouette, ring contour and
+  // z steps keep their full fine resolution.
+  const hasSnapCorner = new Uint8Array(fw * fh);
   for (let fy = 0; fy < fh; fy++) {
     for (let fx = 0; fx < fw; fx++) {
-      if (state[fy * fw + fx] !== 1) continue;
+      const i = fy * fw + fx;
+      if (state[i] !== 1) continue;
       const iTL = fy * vw + fx;
       const iTR = iTL + 1;
       const iBL = (fy + 1) * vw + fx;
       const iBR = iBL + 1;
+      if (snapped[iTL] || snapped[iTR] || snapped[iBL] || snapped[iBR]) {
+        hasSnapCorner[i] = 1;
+      }
+    }
+  }
+  const colBreak = new Uint8Array(fw);
+  for (let fy = 0; fy < fh; fy++) {
+    for (let fx = 0; fx < fw; fx++) {
+      const i = fy * fw + fx;
+      if (state[i] === 1 && hasSnapCorner[i]) {
+        colBreak[fx] = 1;
+        if (fx > 0) colBreak[fx - 1] = 1;
+        continue;
+      }
+      if (fx === 0) continue;
+      const j = i - 1;
+      if (state[i] !== 1 || state[j] !== 1) {
+        colBreak[fx] = 1;
+        continue;
+      }
+      if (smooth) {
+        const aTL = fy * vw + fx;
+        const bTL = aTL - 1;
+        if (
+          sheets!.v0[aTL] !== sheets!.v0[bTL] ||
+          sheets!.v1[aTL] !== sheets!.v1[bTL]
+        ) {
+          colBreak[fx] = 1;
+        }
+      } else if (fz0[i] !== fz0[j] || fz1[i] !== fz1[j]) {
+        colBreak[fx] = 1;
+      }
+    }
+  }
+  for (let fy = 0; fy < fh; fy++) {
+    let fx = 0;
+    while (fx < fw) {
+      const i = fy * fw + fx;
+      if (state[i] !== 1) {
+        fx++;
+        continue;
+      }
+      const z0 = smooth ? sheets!.v0[fy * vw + fx] : fz0[i];
+      const z1 = smooth ? sheets!.v1[fy * vw + fx] : fz1[i];
+      let runEnd = fx + 1;
+      while (runEnd < fw) {
+        const j = fy * fw + runEnd;
+        if (
+          state[j] !== 1 ||
+          hasSnapCorner[j] ||
+          colBreak[runEnd] ||
+          (smooth
+            ? sheets!.v0[fy * vw + runEnd] !== z0 ||
+              sheets!.v0[fy * vw + runEnd + 1] !== z0 ||
+              sheets!.v0[(fy + 1) * vw + runEnd] !== z0 ||
+              sheets!.v0[(fy + 1) * vw + runEnd + 1] !== z0 ||
+              sheets!.v1[fy * vw + runEnd] !== z1 ||
+              sheets!.v1[fy * vw + runEnd + 1] !== z1 ||
+              sheets!.v1[(fy + 1) * vw + runEnd] !== z1 ||
+              sheets!.v1[(fy + 1) * vw + runEnd + 1] !== z1
+            : fz0[j] !== z0 || fz1[j] !== z1)
+        ) {
+          break;
+        }
+        runEnd++;
+      }
+      const iTL = fy * vw + fx;
+      const iTR = fy * vw + runEnd;
+      const iBL = (fy + 1) * vw + fx;
+      const iBR = (fy + 1) * vw + runEnd;
       if (smooth) {
         const { v0, v1 } = sheets!;
-        // top (+Z, CCW seen from above: BL -> BR -> TR -> TL)
         emitQuad(iBL, iBR, iTR, iTL, v1[iBL], v1[iBR], v1[iTR], v1[iTL], false);
-        // bottom (-Z, reversed winding)
         emitQuad(iBL, iBR, iTR, iTL, v0[iBL], v0[iBR], v0[iTR], v0[iTL], true);
       } else {
-        const z1 = fz1[fy * fw + fx];
-        const z0 = fz0[fy * fw + fx];
         emitQuad(iBL, iBR, iTR, iTL, z1, z1, z1, z1, false);
         emitQuad(iBL, iBR, iTR, iTL, z0, z0, z0, z0, true);
       }
+      fx = runEnd;
     }
   }
 

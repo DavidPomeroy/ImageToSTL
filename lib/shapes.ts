@@ -225,7 +225,14 @@ export function makeShapeSilhouette(
       Math.max(lo, Math.min(hi, v));
     return {
       inside: () => true,
-      project: (px, py) => [clamp(px, 0, gw), clamp(py, 0, gh)],
+      // Nearest point on the rectangle's boundary (the image edge frame),
+      // in image pixel coordinates — used by the border-ring offset.
+      project: (px, py) => {
+        const dx = Math.min(px, gw - px);
+        const dy = Math.min(py, gh - py);
+        if (dx <= dy) return [clamp(px, 0, gw), py * 2 <= gh ? 0 : gh];
+        return [px * 2 <= gw ? 0 : gw, clamp(py, 0, gh)];
+      },
     };
   }
   const minDim = Math.min(gw, gh);

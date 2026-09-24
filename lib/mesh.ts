@@ -274,6 +274,109 @@ export function quantizeZ(z: Float32Array | number[]): void {
 }
 
 /**
+ * Fine-cell border-ring classification, shared by every colour part of a
+ * plate: 1 when the cell's center lies inside the shape AND within `px`
+ * pixels (Euclidean) of the silhouette. Used instead of a per-pixel
+ * "border ring" so the ring reaches exactly out to the silhouette (no ragged
+ * one-pixel band of interior treatment short of the edge) and its inner edge
+ * follows the true inward offset of the shape instead of a pixel staircase.
+ */
+export function computeRingMask(
+  fine: FineShapeGrid,
+  gw: number,
+  gh: number,
+  px: number
+): Uint8Array {
+  const fw = fine.fw;
+  const fh = fine.fh;
+  const sub = fine.sub;
+  const ring = new Uint8Array(fw * fh);
+  if (px <= 0) return ring;
+  let anyOutside = false;
+  for (let i = 0; i < fw * fh; i++) {
+    if (!fine.inside[i]) {
+      anyOutside = true;
+      break;
+    }
+  }
+  if (!anyOutside) {
+    // Full-image rectangle (or a shape that swallows the whole grid): the
+    // border is a frame around the image edges.
+    for (let fy = 0; fy < fh; fy++) {
+      for (let fx = 0; fx < fw; fx++) {
+        const cx = (fx + 0.5) / sub;
+        const cy = (fy + 0.5) / sub;
+        if (Math.min(cx, cy, gw - cx, gh - cy) <= px) ring[fy * fw + fx] = 1;
+      }
+    }
+    return ring;
+  }
+  // Multi-source BFS (8-connected, Chebyshev hops) from the outside cells to
+  // bound the exact distance tests. A cell whose center is within `px` pixels
+  // of the boundary is at most ~1.5*px*sub + 3 hops away (a diagonal hop
+  // covers sqrt(2) fine cells), so the band never misses a ring cell.
+  const K = Math.ceil(px * sub * 1.5) + 3;
+  const hops = new Int32Array(fw * fh).fill(-1);
+  let frontier: number[] = [];
+  for (let i = 0; i < fw * fh; i++) {
+    if (!fine.inside[i]) {
+      hops[i] = 0;
+      frontier.push(i);
+    }
+  }
+  for (let h = 0; h < K && frontier.length; h++) {
+    const next: number[] = [];
+    for (const i of frontier) {
+      const fx = i % fw;
+      const fy = (i / fw) | 0;
+      for (let k = 0; k < 8; k++) {
+        const nx = fx + [1, -1, 0, 0, 1, 1, -1, -1][k];
+        const ny = fy + [0, 0, 1, -1, 1, -1, 1, -1][k];
+        if (nx < 0 || ny < 0 || nx >= fw || ny >= fh) continue;
+        const j = ny * fw + nx;
+        if (hops[j] !== -1) continue;
+        hops[j] = h + 1;
+        next.push(j);
+      }
+    }
+    frontier = next;
+  }
+  for (let fy = 0; fy < fh; fy++) {
+    for (let fx = 0; fx < fw; fx++) {
+      const i = fy * fw + fx;
+      if (!fine.inside[i] || hops[i] < 0) continue;
+      const cx = (fx + 0.5) / sub;
+      const cy = (fy + 0.5) / sub;
+      const [qx, qy] = fine.project(cx, cy);
+      if (Math.hypot(cx - qx, cy - qy) <= px) ring[i] = 1;
+    }
+  }
+  return ring;
+}
+
+/**
+ * Border-ring assignment for one colour part of a plate.
+ */
+export interface RingSpec {
+  /** Ring width in pixels (Euclidean distance to the silhouette). */
+  px: number;
+  /** Fine-cell ring mask from `computeRingMask` (shared by all parts). */
+  mask: Uint8Array;
+  /** Whether ring cells belong to this part (the border colour / relief). */
+  owns: boolean;
+  /**
+   * Whether some OTHER part of the plate also owns ring cells (CMYK: all
+   * four parts share the ring). Gates the diagonal-contact repair: a RING
+   * cell may only be cleared when another part's ring covers it, otherwise
+   * the clear would punch a hole in the border along the outline.
+   */
+  othersOwnRing: boolean;
+  /** z range of ring cells in this part. */
+  z0: number;
+  z1: number;
+}
+
+/**
  * Shape-clipped heightfield mesh with analytic (smooth) silhouette edges.
  *
  * Every pixel cell is refined into `sub` x `sub` fine cells; a fine cell is
@@ -291,6 +394,23 @@ export function quantizeZ(z: Float32Array | number[]): void {
  * centers (relief smoothing); otherwise z is flat per pixel and side walls
  * are split at every z level present in the part, keeping vertically stacked
  * parts manifold.
+ *
+ * `ring` describes the border ring: fine cells within `ring.px` pixels of
+ * the silhouette (per `ring.mask`, computed once for the whole plate) belong
+ * to the border treatment instead of their parent pixel — they carry the
+ * ring z range for the part that owns the ring, and no material at all for
+ * the other parts. Vertices straddling the ring's inner contour snap onto
+ * the true inward offset of the silhouette, so the border's inner edge is a
+ * smooth line/curve, matching its outer (silhouette) edge.
+ *
+ * `othersSolid` (per pixel) marks pixels that carry material in some OTHER
+ * part of the plate. It gates the diagonal-contact repair: a contact whose
+ * orthogonal cells are empty for this part is cleared only when another part
+ * covers the cleared cell too — clearing there keeps the part manifold
+ * without opening a hole in the combined plate. Where no other part covers
+ * it, the zero-volume point contact is left as-is (as the shipped per-pixel
+ * builder produced); punching the cell out would leave a gap along the
+ * outline.
  */
 export function buildShapeClippedGeometry(
   z0s: Float32Array | number[],
@@ -299,7 +419,9 @@ export function buildShapeClippedGeometry(
   gh: number,
   pixelSize: number,
   fine: FineShapeGrid,
-  smooth = false
+  smooth = false,
+  ring?: RingSpec | null,
+  othersSolid?: Uint8Array | null
 ): TriangleSoup {
   const out: TriangleSoup = [];
   const sub = fine.sub;
@@ -313,13 +435,25 @@ export function buildShapeClippedGeometry(
     i >= 0 && z1s[i] > z0s[i] + 1e-9;
 
   // fine cell states: 0 = empty, 1 = solid, 2 = solid parent clipped by shape
+  // Ring cells (inside the shape within `ring.px` of its boundary) override
+  // their pixel: material of the ring's z range for the part that owns the
+  // ring, nothing at all for the others — this is what makes the border
+  // reach exactly out to the silhouette instead of stopping a ragged
+  // half-pixel short of it.
   const state = new Uint8Array(fw * fh);
+  const ringMask = ring && ring.px > 0 ? ring.mask : null;
+  const ringOwns = ringMask ? !!ring!.owns : false;
   for (let fy = 0; fy < fh; fy++) {
     for (let fx = 0; fx < fw; fx++) {
+      const i = fy * fw + fx;
       const x = (fx / sub) | 0;
       const y = (fy / sub) | 0;
+      if (ringMask && fine.inside[i] && ringMask[i]) {
+        state[i] = ringOwns ? 1 : 0;
+        continue;
+      }
       if (!parentSolid(y * gw + x)) continue;
-      state[fy * fw + fx] = fine.inside[fy * fw + fx] ? 1 : 2;
+      state[i] = fine.inside[i] ? 1 : 2;
     }
   }
   const cell = (fx: number, fy: number): number =>
@@ -333,10 +467,13 @@ export function buildShapeClippedGeometry(
   // Prefer to *fill* one of the two orthogonal cells — but only a cell whose
   // parent pixel already carries this part (silhouette-clipped), using its
   // own pixel's z range, so the fill connects the diagonal pair with material
-  // that was always supposed to be there. If both orthogonals are empty (the
-  // pixel has no material for this part — transparent or another colour),
-  // filling would invent floating/overlapping material, so instead clear one
-  // of the touching diagonal cells (a quarter pixel at sub=4).
+  // that was always supposed to be there. If both orthogonals are empty for
+  // this part, the contact is cleared only when another part of the plate
+  // covers the cleared cell as well (per `othersSolid`): the part stays
+  // manifold and the combined plate keeps its material. Where no other part
+  // covers it, the zero-volume point contact is left as-is — exactly what the
+  // shipped per-pixel builder produced at such corners — because clearing
+  // there would punch a real hole in the plate along the outline.
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
     for (let fy = 0; fy < fh - 1; fy++) {
@@ -348,20 +485,44 @@ export function buildShapeClippedGeometry(
           state[i + 1] !== 1 &&
           state[i + fw] !== 1
         ) {
-          if (state[i + 1] === 2) state[i + 1] = 1;
-          else if (state[i + fw] === 2) state[i + fw] = 1;
-          else state[i + fw + 1] = 0;
-          changed = true;
+          const fillA = state[i + 1] === 2;
+          const fillB = state[i + fw] === 2;
+          if (fillA) state[i + 1] = 1;
+          else if (fillB) state[i + fw] = 1;
+          else {
+            const diag = i + fw + 1;
+            const diagIsRing = !!ringMask && !!ringMask[diag];
+            if (
+              diagIsRing
+                ? ring!.othersOwnRing
+                : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)]
+            ) {
+              state[diag] = 0;
+            }
+          }
+          if (fillA || fillB) changed = true;
         } else if (
           state[i + 1] === 1 &&
           state[i + fw] === 1 &&
           state[i] !== 1 &&
           state[i + fw + 1] !== 1
         ) {
-          if (state[i] === 2) state[i] = 1;
-          else if (state[i + fw + 1] === 2) state[i + fw + 1] = 1;
-          else state[i + fw] = 0;
-          changed = true;
+          const fillA = state[i] === 2;
+          const fillB = state[i + fw + 1] === 2;
+          if (fillA) state[i] = 1;
+          else if (fillB) state[i + fw + 1] = 1;
+          else {
+            const diag = i + fw;
+            const diagIsRing = !!ringMask && !!ringMask[diag];
+            if (
+              diagIsRing
+                ? ring!.othersOwnRing
+                : !!othersSolid && !!othersSolid[parentIndexOfFine(diag)]
+            ) {
+              state[diag] = 0;
+            }
+          }
+          if (fillA || fillB) changed = true;
         }
       }
     }
@@ -372,6 +533,35 @@ export function buildShapeClippedGeometry(
   let sheets: { v0: Float32Array; v1: Float32Array } | null = null;
   if (smooth) {
     sheets = sampleSheets(z0s, z1s, gw, gh, sub);
+    // In the border ring the relief is the border's flat z, not the image
+    // data: override every vertex that touches a ring cell (ring cells
+    // themselves, and the shared edge with the first interior cells, so the
+    // ring's plateau edge lands exactly on the snapped inner contour).
+    if (ringMask && ring!.owns) {
+      const { v0, v1 } = sheets;
+      for (let vy = 0; vy < vh; vy++) {
+        for (let vx = 0; vx < vw; vx++) {
+          let touchesRing = false;
+          for (let oy = -1; oy <= 0 && !touchesRing; oy++) {
+            for (let ox = -1; ox <= 0; ox++) {
+              const fx = vx + ox;
+              const fy = vy + oy;
+              if (fx < 0 || fy < 0 || fx >= fw || fy >= fh) continue;
+              const i = fy * fw + fx;
+              if (ringMask[i] && fine.inside[i]) {
+                touchesRing = true;
+                break;
+              }
+            }
+          }
+          if (touchesRing) {
+            const vi = vy * vw + vx;
+            v0[vi] = ring!.z0;
+            v1[vi] = ring!.z1;
+          }
+        }
+      }
+    }
   }
   const fz0 = new Float32Array(fw * fh);
   const fz1 = new Float32Array(fw * fh);
@@ -386,6 +576,15 @@ export function buildShapeClippedGeometry(
         const pi = parentIndexOfFine(i);
         fz0[i] = z0s[pi];
         fz1[i] = z1s[pi];
+      }
+    }
+    // Ring cells carry the border's flat z range instead of their pixel's.
+    if (ringMask && ring!.owns) {
+      for (let i = 0; i < fw * fh; i++) {
+        if (ringMask[i] && state[i] === 1) {
+          fz0[i] = ring!.z0;
+          fz1[i] = ring!.z1;
+        }
       }
     }
     // nanometre snap (see quantizeZ) so float noise in layer maths cannot
@@ -470,6 +669,42 @@ export function buildShapeClippedGeometry(
           y = (gh - qy) * pixelSize;
         } else {
           doSnap = false;
+        }
+      } else if (ringMask) {
+        // Border-ring inner contour: vertices whose inside neighbourhood
+        // straddles the ring mask snap onto the true inward offset of the
+        // silhouette (nearest boundary point moved inward along the local
+        // normal), so the ring's inner edge is a smooth line/curve instead
+        // of a fine-cell staircase. The rule uses only the part-independent
+        // ring mask, so every part snaps shared vertices to the same point
+        // and the parts keep tiling without gaps or overlaps.
+        let ringInCount = 0;
+        let ringTotal = 0;
+        for (let oy = -1; oy <= 0; oy++) {
+          for (let ox = -1; ox <= 0; ox++) {
+            const fx = vx + ox;
+            const fy = vy + oy;
+            if (fx < 0 || fy < 0 || fx >= fw || fy >= fh) continue;
+            const i = fy * fw + fx;
+            if (!fine.inside[i]) continue;
+            ringTotal++;
+            if (ringMask[i]) ringInCount++;
+          }
+        }
+        if (ringInCount > 0 && ringInCount < ringTotal) {
+          const [qx, qy] = fine.project(px, py);
+          const d = Math.hypot(px - qx, py - qy);
+          if (d > 1e-9 && d <= ring!.px + 1) {
+            const tx = qx + ((px - qx) / d) * ring!.px;
+            const ty = qy + ((py - qy) / d) * ring!.px;
+            // guard against pathological projections (e.g. deep concave
+            // star valleys): never move further than ~2 fine cells
+            if (Math.hypot(tx - px, ty - py) <= 2 / sub) {
+              x = tx * pixelSize;
+              y = (gh - ty) * pixelSize;
+              doSnap = true;
+            }
+          }
         }
       }
       const vi = vy * vw + vx;

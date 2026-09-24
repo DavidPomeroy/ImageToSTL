@@ -30,8 +30,10 @@ import {
   buildHeightfieldGeometry,
   buildShapeClippedGeometry,
   buildSmoothHeightfieldGeometry,
+  computeRingMask,
   makeFineShapeGrid,
   type FineShapeGrid,
+  type RingSpec,
 } from "./mesh";
 import {
   classifyPixels,
@@ -91,6 +93,19 @@ export interface ProcessedImage {
 }
 
 const fmtZ = (n: number): string => String(Number(n.toFixed(2)));
+
+/** Copy of `layers` with border pixels (cls === 1) forced to `v`. */
+function applyBorderToStack(
+  layers: Uint8Array,
+  cls: Uint8Array | null,
+  v: number
+): Uint8Array {
+  const out = layers.slice();
+  if (cls) {
+    for (let i = 0; i < out.length; i++) if (cls[i] === 1) out[i] = v;
+  }
+  return out;
+}
 
 function meshBounds(meshes: ColorMeshData[]): {
   minX: number;
@@ -367,13 +382,34 @@ export function processImageData(
           pixelIntersects
         )
       : null;
+  // Fine-cell border ring, shared by every part: cells inside the shape
+  // within borderMm of its true boundary. This is what the mesh uses (see
+  // RingSpec), so the ring reaches exactly out to the smooth silhouette and
+  // its inner edge follows the shape's inward offset instead of a pixel
+  // staircase.
+  const ringMask =
+    fine && borderMm > 0
+      ? computeRingMask(fine, gw, gh, borderMm / pixelSize)
+      : null;
   const buildMesh = (
     z0s: Float32Array,
     z1s: Float32Array,
-    useSmooth = smooth
+    useSmooth = smooth,
+    ring?: RingSpec | null,
+    othersSolid?: Uint8Array | null
   ): number[] =>
     fine
-      ? buildShapeClippedGeometry(z0s, z1s, gw, gh, pixelSize, fine, useSmooth)
+      ? buildShapeClippedGeometry(
+          z0s,
+          z1s,
+          gw,
+          gh,
+          pixelSize,
+          fine,
+          useSmooth,
+          ring ?? null,
+          othersSolid ?? null
+        )
       : useSmooth
         ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
         : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize);
@@ -386,27 +422,60 @@ export function processImageData(
       for (let i = 0; i < n; i++) {
         const c = cls[i];
         if (c === 0) {
+          // outside the shape: no geometry at all
           stacks.c[i] = 0;
           stacks.m[i] = 0;
           stacks.y[i] = 0;
           stacks.w[i] = 0;
-        } else if (c === 1) {
-          // border: full CMY + max white -> solid dark frame backlit
-          stacks.c[i] = o.colorLayers;
-          stacks.m[i] = o.colorLayers;
-          stacks.y[i] = o.colorLayers;
-          stacks.w[i] = o.whiteMaxLayers;
         }
       }
     }
+    // Preview / metrics keep the pixel-level border ring (full CMY + max
+    // white); the mesh gets the ring as fine cells instead (see ringSpec
+    // below), so the printed ring reaches exactly out to the silhouette.
+    const previewStacks =
+      cls && cls.some((c) => c === 1)
+        ? {
+            c: applyBorderToStack(stacks.c, cls, o.colorLayers),
+            m: applyBorderToStack(stacks.m, cls, o.colorLayers),
+            y: applyBorderToStack(stacks.y, cls, o.colorLayers),
+            w: applyBorderToStack(stacks.w, cls, o.whiteMaxLayers),
+          }
+        : stacks;
     const lh = Math.max(0.04, layerHeight);
 
     let maxZ = 0;
     let filled = 0;
     for (let i = 0; i < n; i++) {
-      const t = (stacks.c[i] + stacks.m[i] + stacks.y[i] + stacks.w[i]) * lh;
+      const t =
+        (previewStacks.c[i] +
+          previewStacks.m[i] +
+          previewStacks.y[i] +
+          previewStacks.w[i]) *
+        lh;
       if (t > 0) filled++;
       if (t > maxZ) maxZ = t;
+    }
+
+    // Border ring: the ring cells of every part span the full border stack
+    // (full CMY + max white), exactly as a fully-covered border pixel did.
+    // All four parts share the ring, so a ring cell may be cleared by the
+    // diagonal-contact repair without opening a hole in the plate.
+    const ringPx = borderMm / pixelSize;
+    const ringSpec: RingSpec | null = ringMask
+      ? { px: ringPx, mask: ringMask, owns: true, othersOwnRing: true, z0: 0, z1: 0 }
+      : null;
+    // Pixels covered by more than one part (C and M and Y and W overlap on
+    // dark pixels): there, the repair may clear a diagonal contact in one
+    // part because the others still cover the cell.
+    const othersSolid = new Uint8Array(n);
+    {
+      const matCount = new Uint8Array(n);
+      for (const key of ["c", "m", "y", "w"] as const) {
+        const layers = stacks[key];
+        for (let i = 0; i < n; i++) if (layers[i] > 0) matCount[i]++;
+      }
+      for (let i = 0; i < n; i++) othersSolid[i] = matCount[i] > 1 ? 1 : 0;
     }
 
     const partDefs = [
@@ -430,6 +499,8 @@ export function processImageData(
     const meshes: ColorMeshData[] = [];
     for (const def of partDefs) {
       const layers = stacks[def.key];
+      const ringLayers =
+        def.key === "w" ? o.whiteMaxLayers : o.colorLayers;
       let count = 0;
       for (let i = 0; i < n; i++) {
         if (layers[i] > 0) {
@@ -442,13 +513,20 @@ export function processImageData(
         }
         base[i] += layers[i] * lh;
       }
+      if (ringSpec) {
+        ringSpec.z0 = Math.max(0, def.key === "c" ? -EPS : 0);
+        ringSpec.z1 =
+          (def.key === "c" ? 0 : o.colorLayers * lh * (def.key === "m" ? 1 : def.key === "y" ? 2 : 3)) +
+          ringLayers * lh +
+          EPS;
+      }
       meshes.push({
         color: def.color,
         name: def.name,
         pixelCount: count,
         z0: 0,
         z1: maxZ,
-        positions: buildMesh(z0s, z1s),
+        positions: buildMesh(z0s, z1s, smooth, ringSpec, othersSolid),
       });
     }
 
@@ -473,7 +551,7 @@ export function processImageData(
       depthMm: maxZ,
       pixelSizeMm: pixelSize,
       triangleCount: meshes.reduce((sum, mm) => sum + mm.positions.length, 0) / 9,
-      cmykPreview: simulateCmykPreview(stacks, o),
+      cmykPreview: simulateCmykPreview(previewStacks, o),
       ...boundsFields(meshes),
     };
   }
@@ -486,23 +564,33 @@ export function processImageData(
       depthMm,
       layerHeight
     );
+    // The mesh's border ring is applied per fine cell (ringSpec below); the
+    // preview keeps the pixel-level ring so the 2D backlit preview shows it.
+    let previewHeights = heights;
     if (cls) {
       for (let i = 0; i < n; i++) {
         const c = cls[i];
         if (c === 0) heights[i] = 0;
-        else if (c === 1) heights[i] = maxMm; // border: thickest = darkest
+      }
+      if (cls.some((c) => c === 1)) {
+        previewHeights = heights.slice();
+        for (let i = 0; i < n; i++) if (cls[i] === 1) previewHeights[i] = maxMm;
       }
     }
     let opaque = 0;
-    for (let i = 0; i < n; i++) if (heights[i] > 0) opaque++;
+    for (let i = 0; i < n; i++) if (previewHeights[i] > 0) opaque++;
     const z0s = new Float32Array(n); // all zero: every column starts at z=0
+    const ringPx = borderMm / pixelSize;
+    const ringSpec: RingSpec | null = ringMask
+      ? { px: ringPx, mask: ringMask, owns: true, othersOwnRing: false, z0: 0, z1: maxMm }
+      : null;
     const mesh: ColorMeshData = {
       color: [245, 245, 240],
       name: "Lithophane (white filament)",
       pixelCount: opaque,
       z0: 0,
       z1: maxMm,
-      positions: buildMesh(z0s, heights),
+      positions: buildMesh(z0s, heights, smooth, ringSpec),
     };
     if (curveDeg > 0.01) {
       const minZ = bendPositions(mesh.positions, widthMm, curveDeg);
@@ -522,7 +610,7 @@ export function processImageData(
       depthMm: maxMm,
       pixelSizeMm: pixelSize,
       triangleCount: mesh.positions.length / 9,
-      heights,
+      heights: previewHeights,
       minThicknessMm: minMm,
       ...boundsFields([mesh]),
     };
@@ -532,9 +620,7 @@ export function processImageData(
   const grid = mapPixelsToPalette(imageData.data, palette);
   if (cls) {
     for (let i = 0; i < n; i++) {
-      const c = cls[i];
-      if (c === 0) grid[i] = EMPTY;
-      else if (c === 1) grid[i] = 0; // border: Filament 1 (darkest)
+      if (cls[i] === 0) grid[i] = EMPTY;
     }
   }
 
@@ -564,13 +650,46 @@ export function processImageData(
   }
 
   const counts = new Array<number>(palette.length).fill(0);
+  // Preview / metrics keep the pixel-level border ring (Filament 1, the
+  // darkest); the mesh gets the ring as fine cells instead (ringSpec below),
+  // so the printed ring reaches exactly out to the silhouette and its inner
+  // edge follows the shape instead of a pixel staircase.
+  const previewGrid =
+    cls && cls.some((c) => c === 1)
+      ? (() => {
+          const g = grid.slice();
+          for (let i = 0; i < n; i++) if (cls[i] === 1) g[i] = 0;
+          return g;
+        })()
+      : grid;
   let filled = 0;
   for (let i = 0; i < n; i++) {
-    if (grid[i] !== EMPTY) {
-      counts[grid[i]]++;
+    if (previewGrid[i] !== EMPTY) {
+      counts[previewGrid[i]]++;
       filled++;
     }
   }
+
+  const ringPx = borderMm / pixelSize;
+  const ringSpecFor = (i: number, z0: number, z1: number): RingSpec | null =>
+    ringMask
+      ? { px: ringPx, mask: ringMask, owns: i === 0, othersOwnRing: false, z0, z1 }
+      : null;
+  // Layered bands nest (band i covers every pixel of colour >= i), so for
+  // parts above the first, every non-empty pixel is also covered by band 0 —
+  // there the repair may clear a diagonal contact. Band 0 only shares pixels
+  // of colour >= 1. Mosaic pixels carry exactly one colour, so no clear is
+  // ever union-safe there; the repair leaves those zero-volume point
+  // contacts alone instead of punching holes along the outline.
+  const othersSolidFor = (i: number): Uint8Array | null => {
+    if (mode !== "layered" || !cls) return null;
+    const out = new Uint8Array(n);
+    for (let p = 0; p < n; p++) {
+      if (grid[p] === EMPTY) continue;
+      out[p] = i === 0 ? (grid[p] >= 1 ? 1 : 0) : 1;
+    }
+    return out;
+  };
 
   let bands: BandInfo[];
   let meshes: ColorMeshData[];
@@ -600,7 +719,13 @@ export function processImageData(
         pixelCount: count,
         z0: bands[i].z0,
         z1: bands[i].z1,
-        positions: buildMesh(z0s, z1s, false),
+        positions: buildMesh(
+          z0s,
+          z1s,
+          false,
+          ringSpecFor(i, bands[i].z0, bands[i].z1),
+          othersSolidFor(i)
+        ),
       };
     });
   } else {
@@ -626,7 +751,7 @@ export function processImageData(
         pixelCount: count,
         z0: 0,
         z1: depthMm,
-        positions: buildMesh(z0s, z1s, false),
+        positions: buildMesh(z0s, z1s, false, ringSpecFor(i, 0, depthMm), null),
       };
     });
   }
@@ -642,7 +767,7 @@ export function processImageData(
     if (minZ < 0) for (const m of meshes) shiftZ(m.positions, -minZ);
   }
   return {
-    grid,
+    grid: previewGrid,
     gw,
     gh,
     mode,

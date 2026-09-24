@@ -849,7 +849,10 @@ export function buildShapeClippedGeometry(
   // column must be mirrored by every row whose faces share that column's
   // vertical edges, otherwise merged faces leave T-junction holes — so the
   // per-column break set is the union over ALL rows of that column's
-  // cell-level transitions (z change, solidity change, snapped corner).
+  // cell-level transitions (z change, solidity change, snapped corner) AND
+  // of every wall segment on the row boundaries: walls are emitted per fine
+  // cell, so a run may never skip a vertex column that a silhouette wall or
+  // a z-step wall ends at.
   // Rows merge only between break columns; the silhouette, ring contour and
   // z steps keep their full fine resolution.
   const hasSnapCorner = new Uint8Array(fw * fh);
@@ -882,17 +885,47 @@ export function buildShapeClippedGeometry(
         continue;
       }
       if (smooth) {
+        // Compare the sheet values at BOTH vertex rows this cell spans:
+        // the run extension tests all four corners, so a sheet change at
+        // either vertex row must force a break here (and in every other
+        // row, via the union) or a neighbouring run would merge across.
         const aTL = fy * vw + fx;
         const bTL = aTL - 1;
+        const aBL = aTL + vw;
+        const bBL = bTL + vw;
         if (
           sheets!.v0[aTL] !== sheets!.v0[bTL] ||
-          sheets!.v1[aTL] !== sheets!.v1[bTL]
+          sheets!.v1[aTL] !== sheets!.v1[bTL] ||
+          sheets!.v0[aBL] !== sheets!.v0[bBL] ||
+          sheets!.v1[aBL] !== sheets!.v1[bBL]
         ) {
           colBreak[fx] = 1;
         }
       } else if (fz0[i] !== fz0[j] || fz1[i] !== fz1[j]) {
         colBreak[fx] = 1;
       }
+    }
+  }
+  // Row-to-row transitions: a wall on a horizontal grid line (silhouette
+  // wall against empty space, or z-step wall between two solid rows) is
+  // emitted per fine cell. A run in either bordering row must keep every
+  // vertex column the wall touches — break at both ends of each wall
+  // segment, or the run's long edge and the wall's short edges become
+  // T-junctions (boundary edges = non-manifold to a slicer).
+  for (let fy = 0; fy <= fh; fy++) {
+    for (let fx = 0; fx < fw; fx++) {
+      const aIdx = fy > 0 ? (fy - 1) * fw + fx : -1; // north cell
+      const bIdx = fy < fh ? fy * fw + fx : -1; // south cell
+      const as = aIdx >= 0 && state[aIdx] === 1;
+      const bs = bIdx >= 0 && state[bIdx] === 1;
+      if (!as && !bs) continue;
+      let wall = as !== bs;
+      if (!wall && !smooth) {
+        wall = fz0[aIdx] !== fz0[bIdx] || fz1[aIdx] !== fz1[bIdx];
+      }
+      if (!wall) continue;
+      colBreak[fx] = 1;
+      if (fx + 1 < fw) colBreak[fx + 1] = 1;
     }
   }
   for (let fy = 0; fy < fh; fy++) {

@@ -19,7 +19,7 @@ import {
   processImageData,
 } from "../lib/pipeline";
 import { classifyPixels, makeShapeSilhouette } from "../lib/shapes";
-import { makeFineShapeGrid } from "../lib/mesh";
+import { makeFineShapeGrid, buildShapeClippedGeometry } from "../lib/mesh";
 import { applyCurve, curveRadius } from "../lib/curve";
 import JSZip from "jszip";
 
@@ -646,6 +646,88 @@ console.log("randomised plate sweep:");
     }
   }
   check(badMeshes === 0, `${configs} randomised plates are manifold (${badMeshes} bad meshes)`);
+}
+
+// Run-merge T-junctions: merged top/bottom face runs must never skip a fine
+// vertex that a wall uses. A grid-aligned silhouette (no snapped corners to
+// force column breaks) with per-pixel z variation used to merge runs across
+// fine cells whose z-step / silhouette walls are emitted per fine cell,
+// leaving T-junction boundary edges — slicers report those as non-manifold
+// and Bambu Studio shows a repair prompt, for every shape except "full"
+// (which never uses the merged builder). Regression for that report.
+console.log("run-merge T-junction regression (grid-aligned shape):");
+{
+  const mk = (z1: (x: number, y: number) => number): number[] => {
+    const gw = 4,
+      gh = 2,
+      ps = 10;
+    const z0s = new Float32Array(gw * gh);
+    const z1s = new Float32Array(gw * gh);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) z1s[y * gw + x] = z1(x, y);
+    }
+    const fine = makeFineShapeGrid(
+      makeShapeSilhouette({ type: "square", cx: 0.5, cy: 0.5, size: 1 }, gw, gh),
+      gw,
+      gh,
+      4
+    );
+    return buildShapeClippedGeometry(z0s, z1s, gw, gh, ps, fine, false, null, null);
+  };
+  for (const [label, geom] of [
+    ["uniform z", mk(() => 5)],
+    ["z-step bands", mk((_x, y) => (y === 0 ? 5 : 3))],
+  ] as [string, number[]][]) {
+    const { holes, bad } = analyzeEdges(geom);
+    check(
+      holes === 0 && bad === 0,
+      `shape-clipped ${label}: runs keep every wall vertex (holes=${holes} bad=${bad})`
+    );
+  }
+
+  // Pipeline level: a perfectly grid-aligned square on a noisy image used to
+  // leave hundreds to thousands of T-junction edges in every mode but mosaic.
+  {
+    const GW2 = 24,
+      GH2 = 18;
+    let rng = 24680;
+    const rnd = () => (rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const px = new Uint8ClampedArray(GW2 * GH2 * 4);
+    for (let i = 0; i < GW2 * GH2; i++) {
+      const o = i * 4;
+      px[o] = rnd() * 255;
+      px[o + 1] = rnd() * 255;
+      px[o + 2] = rnd() * 255;
+      px[o + 3] = 255;
+    }
+    const img = { data: px, width: GW2, height: GH2 } as unknown as ImageData;
+    const pal: RGB[] = autoPalette(collectPixels(px), 4);
+    for (const mode of ["mosaic", "layered", "lithophane", "cmyk"] as const) {
+      const proc = processImageData(
+        img,
+        pal,
+        100,
+        5,
+        mode,
+        0.2,
+        0.8,
+        { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 },
+        false,
+        { shape: { type: "square", cx: 0.5, cy: 0.5, size: 1 }, borderMm: 0 }
+      );
+      let holes = 0,
+        bad = 0;
+      for (const m of proc.meshes) {
+        const r = analyzeEdges(m.positions);
+        holes += r.holes;
+        bad += r.bad;
+      }
+      check(
+        holes === 0 && bad === 0,
+        `grid-aligned square ${mode}: runs keep every wall vertex (holes=${holes} bad=${bad})`
+      );
+    }
+  }
 }
 
 // Border ring: the ring must be classified per fine cell against the true

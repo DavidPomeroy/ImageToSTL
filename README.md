@@ -163,8 +163,10 @@ border part(s) per mode, and follows the shape's inward offset — to keep
 those guarantees.
 
 Uniform areas of the top/bottom sheets are emitted as merged runs instead of
-per-fine-cell quads (with per-column break sets so merged faces never leave
-T-junction holes), which typically cuts the triangle count of large plates
+per-fine-cell quads (with per-column break sets — unioned over every row *and*
+mirrored against every side-wall vertex, so a merged face can never skip a
+vertex that a silhouette or z-step wall uses, and no T-junction edges are
+left), which typically cuts the triangle count of large plates
 several-fold while keeping full fine resolution along the silhouette, the
 border ring's contour and every relief step.
 

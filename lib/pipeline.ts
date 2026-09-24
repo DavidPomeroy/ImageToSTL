@@ -630,11 +630,21 @@ export function processImageData(
     }
   }
 
-  // Per-color diagonal pinch fill: two same-colour cells touching only
-  // diagonally leave a non-manifold edge in that colour's mesh (the other
-  // two cells belong to different colours or are empty). Fill one of them
-  // with the pair's colour — a 1-pixel nudge, invisible at print scale.
-  for (let pass = 0; pass < 2; pass++) {
+  // Per-colour diagonal pinch fill: two same-colour cells touching only
+  // diagonally leave a four-way point-contact edge in that colour's mesh (the
+  // other two cells belong to a different colour or are empty). Bambu Studio
+  // refuses such meshes instead of repairing them, and along the silhouette
+  // they turn the side wall into a ragged comb — so every diagonal contact
+  // must go. Filling one of the two orthogonal cells with the pair's colour
+  // is a 1-pixel nudge, invisible at print scale (pixels are ≥ 0.4 mm).
+  //
+  // This has to run to CONVERGENCE, not a fixed two passes: heavily dithered
+  // source art (1-pixel checkerboards — most 8/16-bit game screenshots) is
+  // nothing but diagonal contacts, and each fill can expose a fresh one next
+  // door. The pass cap only bounds cost; the loop exits as soon as a pass
+  // changes nothing, which guarantees a pinch-free grid.
+  for (let pass = 0; pass < 64; pass++) {
+    let changed = false;
     for (let y = 0; y < gh - 1; y++) {
       for (let x = 0; x < gw - 1; x++) {
         const i = y * gw + x;
@@ -643,16 +653,23 @@ export function processImageData(
         if (a !== EMPTY && a === b) {
           const c1 = grid[i + 1];
           const c2 = grid[i + gw];
-          if (c1 !== a && c2 !== a) grid[i + 1] = a;
+          if (c1 !== a && c2 !== a) {
+            grid[i + 1] = a;
+            changed = true;
+          }
         } else {
           const a2 = grid[i + 1];
           const b2 = grid[i + gw];
           if (a2 !== EMPTY && a2 === b2) {
-            if (grid[i] !== a2 && grid[i + gw + 1] !== a2) grid[i] = a2;
+            if (grid[i] !== a2 && grid[i + gw + 1] !== a2) {
+              grid[i] = a2;
+              changed = true;
+            }
           }
         }
       }
     }
+    if (!changed) break;
   }
 
   const counts = new Array<number>(palette.length).fill(0);

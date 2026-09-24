@@ -730,6 +730,62 @@ console.log("run-merge T-junction regression (grid-aligned shape):");
   }
 }
 
+// 1-pixel checkerboard dithering (most 8/16-bit game art) is the worst case
+// for per-colour diagonal contacts: two same-colour cells touching only at a
+// corner leave a four-way point-contact edge, which Bambu Studio refuses
+// instead of repairing. The pinch fill must run to convergence — with a fixed
+// two passes thousands of contacts survive on real dithered art (measured on
+// a 512 px 4-colour mosaic).
+console.log("checkerboard dither pinch regression:");
+{
+  // A PERTURBED checkerboard: real dithered art is never a clean alternation
+  // (quantisation and region junctions break it), and those defects are what
+  // stop the pinch fill from cascading — measured 73 point-contact edges per
+  // 32x32 plate (146 across its parts) and 1036 at 64x64 with the old
+  // two-pass fill.
+  const Wc = 32,
+    Hc = 32;
+  const cpx = new Uint8ClampedArray(Wc * Hc * 4);
+  for (let y = 0; y < Hc; y++) {
+    for (let x = 0; x < Wc; x++) {
+      const o = (y * Wc + x) * 4;
+      const even =
+        (((x + y) % 2) ^
+          ((Math.imul(x * 31 + y * 17, 2654435761) >>> 28) & 1)) === 0;
+      cpx[o] = cpx[o + 1] = cpx[o + 2] = even ? 250 : 10;
+      cpx[o + 3] = 255;
+    }
+  }
+  const cimg = { data: cpx, width: Wc, height: Hc } as unknown as ImageData;
+  const cpal: RGB[] = [
+    [10, 10, 10],
+    [250, 250, 250],
+    [120, 40, 40],
+    [40, 90, 160],
+  ];
+  const proc = processImageData(
+    cimg,
+    cpal,
+    60,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    { shape: { type: "square", cx: 0.5, cy: 0.5, size: 0.8 }, borderMm: 0 }
+  );
+  let worst = 0;
+  for (const m of proc.meshes) {
+    const { holes, bad, saddles } = analyzeEdges(m.positions);
+    worst = Math.max(worst, holes + bad + saddles);
+  }
+  check(
+    worst === 0,
+    `1-px checkerboard mosaic has no point-contact edges (worst=${worst})`
+  );
+}
+
 // Border ring: the ring must be classified per fine cell against the true
 // shape distance — reaching exactly out to the smooth silhouette (no ragged
 // interior band short of the edge, the reported "outside edge gaps") — and

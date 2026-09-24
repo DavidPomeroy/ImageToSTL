@@ -170,6 +170,16 @@ left), which typically cuts the triangle count of large plates
 several-fold while keeping full fine resolution along the silhouette, the
 border ring's contour and every relief step.
 
+At the outline, the wall shows one colour column per boundary pixel — and a
+single colour column is only about one extrusion wide, so where the image is
+dithered the edge used to come out as a barcode of sub-millimetre stripes
+(which slicers cannot reproduce faithfully and which reads as a shattered
+edge). Runs of the outline shorter than a printable length are now absorbed
+into the neighbouring run, so dithered art prints a solid edge; a pixel keeps
+its exact colour wherever its colour really spans a printable stretch of the
+outline, and interior pixels are never touched.
+
+
 ## Curvature
 
 The flat plate can be bent around a vertical (image-height) axis, from flat

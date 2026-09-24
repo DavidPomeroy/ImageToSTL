@@ -643,34 +643,114 @@ export function processImageData(
   // nothing but diagonal contacts, and each fill can expose a fresh one next
   // door. The pass cap only bounds cost; the loop exits as soon as a pass
   // changes nothing, which guarantees a pinch-free grid.
-  for (let pass = 0; pass < 64; pass++) {
-    let changed = false;
-    for (let y = 0; y < gh - 1; y++) {
-      for (let x = 0; x < gw - 1; x++) {
-        const i = y * gw + x;
-        const a = grid[i];
-        const b = grid[i + gw + 1];
-        if (a !== EMPTY && a === b) {
-          const c1 = grid[i + 1];
-          const c2 = grid[i + gw];
-          if (c1 !== a && c2 !== a) {
-            grid[i + 1] = a;
-            changed = true;
-          }
-        } else {
-          const a2 = grid[i + 1];
-          const b2 = grid[i + gw];
-          if (a2 !== EMPTY && a2 === b2) {
-            if (grid[i] !== a2 && grid[i + gw + 1] !== a2) {
-              grid[i] = a2;
+  // Diagonal pinches are resolved before AND after the edge-band pass,
+  // since the edge band can itself expose a new diagonal contact.
+  const fixPinches = (): void => {
+    for (let pass = 0; pass < 64; pass++) {
+      let changed = false;
+      for (let y = 0; y < gh - 1; y++) {
+        for (let x = 0; x < gw - 1; x++) {
+          const i = y * gw + x;
+          const a = grid[i];
+          const b = grid[i + gw + 1];
+          if (a !== EMPTY && a === b) {
+            const c1 = grid[i + 1];
+            const c2 = grid[i + gw];
+            if (c1 !== a && c2 !== a) {
+              grid[i + 1] = a;
               changed = true;
+            }
+          } else {
+            const a2 = grid[i + 1];
+            const b2 = grid[i + gw];
+            if (a2 !== EMPTY && a2 === b2) {
+              if (grid[i] !== a2 && grid[i + gw + 1] !== a2) {
+                grid[i] = a2;
+                changed = true;
+              }
             }
           }
         }
       }
+      if (!changed) break;
     }
-    if (!changed) break;
+  };
+  fixPinches();
+
+  // Edge-band dither absorption. Along the silhouette the plate's outer wall
+  // shows one colour column per boundary pixel, and each column is only ~1
+  // extrusion wide. Runs of one or two columns are unprintable: the wall reads
+  // as a shattered barcode, while the same image gives clean solid blocks
+  // wherever its dither is coarser (which is why one edge can look fine and a
+  // dithered one does not). Each wall line is treated as the 1-D colour
+  // sequence it is, and runs shorter than a printable length are absorbed into
+  // the neighbouring run, swept in both directions so an alternating dither
+  // collapses rather than merely flipping. A pixel keeps its exact print
+  // colour wherever its colour spans a printable stretch of the outline;
+  // interior pixels are never touched.
+  {
+    const minRun = Math.max(2, Math.round(1.4 / pixelSize)); // ~1.4 mm of wall
+    const at = (x: number, y: number): number =>
+      x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x;
+    const sweep = (vertical: boolean, side: number, forward: boolean): boolean => {
+      let changed = false;
+      const outer = vertical ? gw : gh;
+      const inner = vertical ? gh : gw;
+      for (let o = 0; o < outer; o++) {
+        const gridAt = (k: number): number =>
+          vertical ? grid[at(o, k)] : grid[at(k, o)];
+        const isWallAt = (k: number): boolean => {
+          const x = vertical ? o : k,
+            y = vertical ? k : o;
+          return (
+            grid[at(x, y)] !== EMPTY &&
+            grid[at(vertical ? x + side : x, vertical ? y : y + side)] === EMPTY
+          );
+        };
+        const order: number[] = [];
+        for (let k = 0; k < inner; k++) order.push(forward ? k : inner - 1 - k);
+        let prevColour = -1;
+        let i = 0;
+        while (i < order.length) {
+          const k0 = order[i];
+          if (!isWallAt(k0)) {
+            i++;
+            continue;
+          }
+          const c = gridAt(k0);
+          let i1 = i;
+          while (
+            i1 + 1 < order.length &&
+            order[i1 + 1] === order[i1] + (forward ? 1 : -1) &&
+            isWallAt(order[i1 + 1]) &&
+            gridAt(order[i1 + 1]) === c
+          ) {
+            i1++;
+          }
+          const len = i1 - i + 1;
+          if (len < minRun && prevColour >= 0 && prevColour !== c) {
+            for (let q = i; q <= i1; q++)
+              grid[vertical ? at(o, order[q]) : at(order[q], o)] = prevColour;
+            changed = true;
+          } else {
+            prevColour = c;
+          }
+          i = i1 + 1;
+        }
+      }
+      return changed;
+    };
+    for (let pass = 0; pass < 6; pass++) {
+      let changed = false;
+      for (const vertical of [true, false])
+        for (const side of [-1, 1])
+          for (const forward of [true, false])
+            if (sweep(vertical, side, forward)) changed = true;
+      if (!changed) break;
+    }
   }
+
+  fixPinches();
 
   const counts = new Array<number>(palette.length).fill(0);
   // Preview / metrics keep the pixel-level border ring (Filament 1, the

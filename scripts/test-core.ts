@@ -786,6 +786,94 @@ console.log("checkerboard dither pinch regression:");
   );
 }
 
+// Edge-band dither absorption: the outer wall shows one colour column per
+// boundary pixel, so a dithered outline turns the wall into a barcode of
+// sub-millimetre colour columns that no slicer can print faithfully (it reads
+// as a shattered edge). Runs shorter than a printable length must be absorbed
+// into their neighbour, while interior pixels keep their exact colours.
+console.log("edge-band dither absorption:");
+{
+  const S = 32;
+  const epx = new Uint8ClampedArray(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const o = (y * S + x) * 4;
+      const even =
+        ((((x + y) % 2) ^
+          ((Math.imul(x * 31 + y * 17, 2654435761) >>> 28) & 1)) === 0);
+      epx[o] = epx[o + 1] = epx[o + 2] = even ? 250 : 10;
+      epx[o + 3] = 255;
+    }
+  }
+  const eimg = { data: epx, width: S, height: S } as unknown as ImageData;
+  const epal: RGB[] = [
+    [10, 10, 10],
+    [250, 250, 250],
+    [120, 40, 40],
+    [40, 90, 160],
+  ];
+  const proc = processImageData(
+    eimg,
+    epal,
+    60,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    { shape: { type: "square", cx: 0.5, cy: 0.5, size: 0.8 }, borderMm: 0 }
+  );
+  const g = proc.grid;
+  const minRun = Math.max(2, Math.round(1.4 / proc.pixelSizeMm));
+  let mL = -1,
+    mR = -1,
+    mT = -1,
+    mB = -1;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (g[y * S + x] === EMPTY) continue;
+      if (mL < 0 || x < mL) mL = x;
+      if (x > mR) mR = x;
+      if (mT < 0 || y < mT) mT = y;
+      if (y > mB) mB = y;
+    }
+  }
+  const wallRuns = (get: (k: number) => number, from: number, to: number): number[] => {
+    const lens: number[] = [];
+    let last = -1,
+      cur = 0;
+    for (let k = from; k <= to; k++) {
+      const c = get(k);
+      if (c === EMPTY) continue;
+      if (c === last) cur++;
+      else {
+        if (cur) lens.push(cur);
+        last = c;
+        cur = 1;
+      }
+    }
+    if (cur) lens.push(cur);
+    return lens;
+  };
+  const edges = [
+    wallRuns((k) => g[k * S + mL], mT, mB),
+    wallRuns((k) => g[k * S + mR], mT, mB),
+    wallRuns((k) => g[mT * S + k], mL, mR),
+    wallRuns((k) => g[mB * S + k], mL, mR),
+  ];
+  const shortRuns = edges.flat().filter((l) => l < minRun).length;
+  const totalRuns = edges.reduce((a, e) => a + e.length, 0);
+  check(
+    shortRuns === 0,
+    `wall has no unprintably short colour runs (${shortRuns} runs < ${minRun}px, was 28)`
+  );
+  check(
+    totalRuns <= 26,
+    `dithered outline collapses into few wall colour runs (${totalRuns}, was 54)`
+  );
+}
+
 // Border ring: the ring must be classified per fine cell against the true
 // shape distance — reaching exactly out to the smooth silhouette (no ragged
 // interior band short of the edge, the reported "outside edge gaps") — and

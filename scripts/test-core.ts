@@ -970,6 +970,7 @@ check(
   const pos = [
     0, 0, 2, 10, 0, 2, 10, 10, 2,
     0, 0, 2, 10, 10, 2, 0, 10, 2,
+    5, 5, 2, 5, 0, 2, 5, 10, 2, // center column: checks the radial mapping
   ];
   applyCurve(pos, 10, 180);
   const R = 10 / Math.PI;
@@ -984,14 +985,47 @@ check(
       Math.abs(Math.min(...xs) + (R + 2)) < 1e-6,
     `180deg half-cylinder spans +/-(R+z) in X`
   );
-  // the top-center vertex (x=5, z=2) lands at X=0, Z=R+2
+  // the image height runs along the print's up axis: Z = image Y (0..10)
+  const zs = pos.filter((_, i) => i % 3 === 2);
   check(
-    pos.some((_, i) => Math.abs(pos[i]) < 1e-6 && Math.abs(pos[i + 2] - (R + 2)) < 1e-6),
-    "top-center vertex at (0, R+z)"
+    Math.abs(Math.min(...zs)) < 1e-6 && Math.abs(Math.max(...zs) - 10) < 1e-6,
+    "image height becomes the print height (Z spans 0..10)"
+  );
+  // the top-center vertex (x=5, z=2) lands on the cylinder's inner surface,
+  // straight in front of the axis: X = 0, Y = R - (R + z) = -z
+  check(
+    pos.some(
+      (_, i) =>
+        i % 3 === 0 && Math.abs(pos[i]) < 1e-6 && Math.abs(pos[i + 1] + 2) < 1e-6
+    ),
+    "top-center vertex at (0, -z) on the inner surface"
   );
 }
 
-// integration: curved lithophane stays manifold with a sane bbox
+/** Area of horizontal (XY-plane) triangles sitting at the mesh's lowest Z. */
+function contactArea(positions: number[]): number {
+  let minZ = Infinity;
+  for (let i = 2; i < positions.length; i += 3) minZ = Math.min(minZ, positions[i]);
+  let area = 0;
+  for (let t = 0; t + 8 < positions.length; t += 9) {
+    if (
+      Math.abs(positions[t + 2] - minZ) > 1e-6 ||
+      Math.abs(positions[t + 5] - minZ) > 1e-6 ||
+      Math.abs(positions[t + 8] - minZ) > 1e-6
+    ) {
+      continue;
+    }
+    const ax = positions[t], ay = positions[t + 1];
+    const bx = positions[t + 3], by = positions[t + 4];
+    const cx = positions[t + 6], cy = positions[t + 7];
+    area += Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2;
+  }
+  return area;
+}
+
+// integration: curved lithophane stays manifold, stands up and rests on its
+// bottom edge. Bambu Studio reported "empty initial layer" + "floating
+// regions" because the bent plate only touched the bed along its end lines.
 const curvedLitho = processImageData(
   gImage,
   [],
@@ -1008,12 +1042,17 @@ const curvedLitho = processImageData(
 {
   const bad = countNonManifoldEdges(curvedLitho.meshes[0].positions);
   check(bad === 0, `curved lithophane manifold (${bad} bad edges)`);
-  const R = 80 / Math.PI;
-  // peak Z = (R + h(x)) * cos(phi); the thickest pixels sit near the seam
-  // where cos -> 0, so the extent is between R and R + max thickness
+  // lamp-shade orientation: the image height is the print's up axis
+  // the image's bottom row becomes a flat annulus at z = 0, so the object
+  // rests on a real area (width x thickness) instead of a razor-thin line
+  const contact = contactArea(curvedLitho.meshes[0].positions);
   check(
-    curvedLitho.bboxMm.z > R && curvedLitho.bboxMm.z < R + 4,
-    `curved lithophane Z extent sane (${curvedLitho.bboxMm.z.toFixed(1)})`
+    contact > 0.4 * 80 * 0.8 && contact < 80 * 4 + 1,
+    `curved lithophane bottom contact area sane (${contact.toFixed(1)} mm2)`
+  );
+  check(
+    Math.abs(curvedLitho.bboxMm.z - 80) < 1e-6,
+    `curved lithophane stands on its bottom edge (Z extent = image height, ${curvedLitho.bboxMm.z.toFixed(1)})`
   );
 }
 
@@ -1041,6 +1080,17 @@ check(
   `full-cylinder outer diameter (${cylinder.bboxMm.x.toFixed(1)})`
 );
 
+/** Min radial distance of a layered band's vertices from the bend axis. */
+function band2Radial(p: { meshes: { positions: number[] }[] }): number {
+  const R = curveRadius(40, 90);
+  let rMin = Infinity;
+  const b2 = p.meshes[1].positions;
+  for (let i = 0; i < b2.length; i += 3) {
+    rMin = Math.min(rMin, Math.hypot(b2[i], R - b2[i + 1]));
+  }
+  return rMin;
+}
+
 // regression: curved multi-part plates must share ONE bed translation —
 // per-part translation pulled stacked bands out of radial alignment
 {
@@ -1067,8 +1117,8 @@ check(
     "curved layered: bottom band rests on the bed"
   );
   check(
-    Math.abs(minZ(cl.meshes[1]) - 1.2 * Math.SQRT1_2) < 0.01,
-    `curved layered: band 2 keeps its radial position (${minZ(cl.meshes[1]).toFixed(3)}, expect ~0.849)`
+    Math.abs(band2Radial(cl) - (curveRadius(40, 90) + 1.2)) < 0.02,
+    `curved layered: band 2 keeps its radial position (${band2Radial(cl).toFixed(3)}, expect ~${(curveRadius(40, 90) + 1.2).toFixed(3)})`
   );
   for (const m of cl.meshes) {
     const bad = countNonManifoldEdges(m.positions);

@@ -3,12 +3,19 @@
 // lamp-shade shape.
 //
 // The plate's width becomes the arc length of the INNER surface
-// (radius R = width / theta). The image surface faces outward: a flat point
-// at (x, y, z) maps to radius R + z, angle phi = (x - width/2) / R:
-//   X' = (R + z) * sin(phi)
-//   Y' = y
-//   Z' = (R + z) * cos(phi) - R   (then shifted so the solid rests on the
-//                                bed, min Z = 0)
+// (radius R = width / theta). The bend wraps the width around the axis and
+// keeps the image height running ALONG the axis, which becomes the print's
+// up axis — so the bent plate stands on its bottom edge (the image's bottom
+// row), exactly like a lamp shade, and the image surface faces outward:
+//   a flat point at (x, y, z) maps to radius R + z, angle phi = (x-w/2)/R:
+//     X' = (R + z) * sin(phi)
+//     Y' = R - (R + z) * cos(phi)   (radial offset, horizontal)
+//     Z' = y                        (image height = print height)
+// With Z' = y the bottom face (y = 0) is a flat annular sector lying in the
+// z = 0 plane, so the solid rests on the bed over its full bottom area
+// (a thin ring / arc) instead of touching along the two end edges.
+// The map is a proper rotation of the wrapped surface (det = +1), so a
+// manifold mesh with outward normals stays manifold and outward-facing.
 //
 // The transform is a smooth homeomorphism (for theta < 360deg), so manifold
 // meshes stay manifold. Full 360deg is clamped to 359.5deg internally so the
@@ -41,12 +48,14 @@ export function bendPositions(
   let minZ = Infinity;
   for (let i = 0; i < positions.length; i += 3) {
     const x = positions[i];
+    const y = positions[i + 1];
     const z = positions[i + 2];
     const phi = (x - half) / R;
     const rad = R + z;
     positions[i] = rad * Math.sin(phi);
-    positions[i + 2] = rad * Math.cos(phi) - R;
-    if (positions[i + 2] < minZ) minZ = positions[i + 2];
+    positions[i + 1] = R - rad * Math.cos(phi);
+    positions[i + 2] = y;
+    if (y < minZ) minZ = y;
   }
   return isFinite(minZ) ? minZ : 0;
 }
@@ -67,5 +76,5 @@ export function applyCurve(
   curveDeg: number
 ): void {
   const minZ = bendPositions(positions, widthMm, curveDeg);
-  if (minZ < 0) shiftZ(positions, -minZ);
+  if (isFinite(minZ)) shiftZ(positions, -minZ);
 }

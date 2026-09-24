@@ -535,7 +535,12 @@ export function processImageData(
       for (const m of meshes) {
         minZ = Math.min(minZ, bendPositions(m.positions, widthMm, curveDeg));
       }
-      if (minZ < 0) for (const m of meshes) shiftZ(m.positions, -minZ);
+      // Every part gets the SAME bed translation (per-part translation would
+      // pull stacked bands out of radial alignment) and it is applied
+      // unconditionally: the bent plate stands on its bottom edge, so its
+      // lowest point must sit at z = 0 — never a fraction of a millimetre
+      // above the bed.
+      if (isFinite(minZ)) for (const m of meshes) shiftZ(m.positions, -minZ);
     }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `cmykPreview`
@@ -594,7 +599,8 @@ export function processImageData(
     };
     if (curveDeg > 0.01) {
       const minZ = bendPositions(mesh.positions, widthMm, curveDeg);
-      if (minZ < 0) shiftZ(mesh.positions, -minZ);
+      // Re-seat the standing plate: its bottom edge is the z = 0 contact face.
+      if (isFinite(minZ)) shiftZ(mesh.positions, -minZ);
     }
     return {
       grid: new Uint8Array(n).fill(EMPTY), // preview uses `heights`
@@ -764,7 +770,9 @@ export function processImageData(
     for (const m of meshes) {
       minZ = Math.min(minZ, bendPositions(m.positions, widthMm, curveDeg));
     }
-    if (minZ < 0) for (const m of meshes) shiftZ(m.positions, -minZ);
+    // One shared bed translation, applied unconditionally: the bent plate
+    // stands on its bottom edge (z = 0), never floating above the bed.
+    if (isFinite(minZ)) for (const m of meshes) shiftZ(m.positions, -minZ);
   }
   return {
     grid: previewGrid,

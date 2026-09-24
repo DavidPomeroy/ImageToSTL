@@ -175,8 +175,13 @@ border ring's contour and every relief step.
 The flat plate can be bent around a vertical (image-height) axis, from flat
 (0°) to a **full cylinder (360°)** — the classic curved lithophane / lamp
 shade. The plate width becomes the inner surface's arc length (bend radius
-shown in the stats when curved), the image faces outward, and the solid is
-re-seated on the bed automatically. Full 360° is clamped internally to
+shown in the stats when curved) and the image faces outward.
+
+The bent plate **stands on its bottom edge**: the image's height becomes the
+print's Z axis, so the bottom row of the image becomes a flat ring/arc lying
+on the bed and the object rests on real contact area from the first layer up
+(no "floating regions" in the slicer). The solid is re-seated on the bed
+automatically, at any curvature and for every shape. Full 360° is clamped internally to
 359.5° so the seam edges never coincide — the tiny gap prints cleanly and is
 handy for lamp fittings. Works with every mode, shape and border, and with
 both pixelated and smoothed surfaces.

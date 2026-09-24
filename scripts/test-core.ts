@@ -18,7 +18,8 @@ import {
   meshPartPositions,
   processImageData,
 } from "../lib/pipeline";
-import { classifyPixels } from "../lib/shapes";
+import { classifyPixels, makeShapeSilhouette } from "../lib/shapes";
+import { makeFineShapeGrid } from "../lib/mesh";
 import { applyCurve, curveRadius } from "../lib/curve";
 import JSZip from "jszip";
 
@@ -645,6 +646,232 @@ console.log("randomised plate sweep:");
     }
   }
   check(badMeshes === 0, `${configs} randomised plates are manifold (${badMeshes} bad meshes)`);
+}
+
+// Border ring: the ring must be classified per fine cell against the true
+// shape distance — reaching exactly out to the smooth silhouette (no ragged
+// interior band short of the edge, the reported "outside edge gaps") — and
+// its inner edge must be snapped onto the shape's inward offset (no pixel
+// staircase). Verified against the real mesh geometry of every print mode:
+//  - coverage: every fine cell inside the silhouette (clear of the outline)
+//    carries material from at least one part, and the ring band belongs to
+//    exactly the border part(s) of the mode;
+//  - relief: in lithophane mode the ring band is the full max thickness;
+//  - smoothness: every vertex straddling the ring's inner contour sits
+//    exactly on the true offset circle.
+console.log("border ring (fine cells, smooth inner edge):");
+{
+  const BW = 48,
+    BH = 48;
+  let rng = 13579;
+  const rnd = () => (rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const bpx = new Uint8ClampedArray(BW * BH * 4);
+  for (let i = 0; i < BW * BH; i++) {
+    const o = i * 4;
+    bpx[o] = rnd() * 255;
+    bpx[o + 1] = rnd() * 255;
+    bpx[o + 2] = rnd() * 255;
+    bpx[o + 3] = 255;
+  }
+  const noiseImage = { data: bpx, width: BW, height: BH } as unknown as ImageData;
+  const borderPalette: RGB[] = [
+    [30, 30, 30],
+    [200, 40, 40],
+    [40, 200, 60],
+    [240, 240, 235],
+  ];
+  const shape = { type: "circle" as const, cx: 0.5, cy: 0.5, size: 1 };
+  const borderMm = 3.5;
+  const widthMm = 48; // 1mm pixels -> border ring is 3.5 fine-ish pixels wide
+  const pixelSize = widthMm / BW;
+  const borderPx = borderMm / pixelSize;
+  const sub = 4;
+  const fine = makeFineShapeGrid(makeShapeSilhouette(shape, BW, BH), BW, BH, sub);
+  const fw = fine.fw,
+    fh = fine.fh;
+  const cpx = 0.5 * BW,
+    cpy = 0.5 * BH,
+    R = 0.5 * Math.min(BW, BH);
+  const radiusPx = (cx: number, cy: number): number =>
+    Math.hypot(cx - cpx, cy - cpy);
+
+  for (const mode of ["mosaic", "layered", "lithophane", "cmyk"] as const) {
+    const proc = processImageData(
+      noiseImage,
+      borderPalette,
+      widthMm,
+      5,
+      mode,
+      0.2,
+      0.8,
+      { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 },
+      false,
+      { shape, borderMm }
+    );
+
+    // Rasterize every part's flat (equal-z) faces onto the fine cells to get
+    // per-cell part coverage and the union's top height.
+    const partMask = new Uint8Array(fw * fh); // bitmask of parts covering a cell
+    const topZ = new Float32Array(fw * fh);
+    const inTri = (
+      ax: number, ay: number,
+      bx: number, by: number,
+      cx: number, cy: number,
+      px: number, py: number
+    ): boolean => {
+      const d = (by - ay) * (cx - ax) - (bx - ax) * (cy - ay);
+      if (Math.abs(d) < 1e-12) return false;
+      const w1 = ((px - ax) * (cy - ay) - (cx - ax) * (py - ay)) / d;
+      const w2 = ((bx - ax) * (py - ay) - (px - ax) * (by - ay)) / d;
+      const w0 = 1 - w1 - w2;
+      return w0 >= -1e-9 && w1 >= -1e-9 && w2 >= -1e-9;
+    };
+    for (let k = 0; k < proc.meshes.length; k++) {
+      const m = proc.meshes[k];
+      for (let t = 0; t + 8 < m.positions.length; t += 9) {
+        // mesh (mm, Y up) -> image pixel coords (row 0 at top) to match the
+        // fine cell centers
+        const ax = m.positions[t] / pixelSize,
+          ay = BH - m.positions[t + 1] / pixelSize,
+          az = m.positions[t + 2];
+        const bx = m.positions[t + 3] / pixelSize,
+          by = BH - m.positions[t + 4] / pixelSize,
+          bz = m.positions[t + 5];
+        const cx = m.positions[t + 6] / pixelSize,
+          cy = BH - m.positions[t + 7] / pixelSize,
+          cz = m.positions[t + 8];
+        // only flat (top/bottom) faces say anything about XY coverage
+        if (!(Math.abs(az - bz) < 1e-9 && Math.abs(bz - cz) < 1e-9)) continue;
+        const minX = Math.min(ax, bx, cx),
+          maxX = Math.max(ax, bx, cx);
+        const minY = Math.min(ay, by, cy),
+          maxY = Math.max(ay, by, cy);
+        const fx0 = Math.max(0, Math.floor(minX * sub - 0.5));
+        const fx1 = Math.min(fw - 1, Math.ceil(maxX * sub));
+        const fy0 = Math.max(0, Math.floor(minY * sub - 0.5));
+        const fy1 = Math.min(fh - 1, Math.ceil(maxY * sub));
+        for (let fy = fy0; fy <= fy1; fy++) {
+          for (let fx = fx0; fx <= fx1; fx++) {
+            const px = (fx + 0.5) / sub;
+            const py = (fy + 0.5) / sub;
+            if (!inTri(ax, ay, bx, by, cx, cy, px, py)) continue;
+            const i = fy * fw + fx;
+            partMask[i] |= 1 << k;
+            if (az > topZ[i]) topZ[i] = az;
+          }
+        }
+      }
+    }
+
+    let uncovered = 0; // union gaps: real holes in the combined plate
+    let wrongRing = 0; // ring band not owned by the mode's border part(s)
+    let wrongRingZ = 0; // lithophane: ring band not at max thickness
+    let wrongInterior = 0; // mosaic: interior cell claimed by more than one part
+    const ringOwnerMask = mode === "cmyk" ? 0b1111 : 1;
+    for (let fy = 0; fy < fh; fy++) {
+      for (let fx = 0; fx < fw; fx++) {
+        const i = fy * fw + fx;
+        if (!fine.inside[i]) continue;
+        const px = (fx + 0.5) / sub;
+        const py = (fy + 0.5) / sub;
+        const edgeDist = R - radiusPx(px, py); // distance to the circle
+        if (edgeDist < 2 / sub) continue; // too close to the outline
+        const isRing = edgeDist <= borderPx;
+        // skip the contour straddle band on both sides: the snapped edge
+        // distorts the boundary cells' quads, so cell-center rasterisation
+        // is not meaningful there
+        if (isRing && edgeDist > borderPx - 2 / sub) continue;
+        if (!isRing && edgeDist < borderPx + 2 / sub) continue;
+        const mask = partMask[i];
+        if (mask === 0) {
+          uncovered++;
+          continue;
+        }
+        if (isRing) {
+          if (mask !== ringOwnerMask) wrongRing++;
+          if (mode === "lithophane" && Math.abs(topZ[i] - 5) > 1e-6) {
+            wrongRingZ++;
+          }
+        } else if (mode === "mosaic" && (mask & (mask - 1)) !== 0) {
+          wrongInterior++;
+        }
+      }
+    }
+    check(
+      uncovered === 0,
+      `${mode}: no gaps in the combined plate (${uncovered} uncovered fine cells)`
+    );
+    check(
+      wrongRing === 0,
+      `${mode}: border ring band owned by the border part(s) (${wrongRing} wrong cells)`
+    );
+    if (mode === "lithophane") {
+      check(
+        wrongRingZ === 0,
+        `lithophane: border ring band is full max thickness (${wrongRingZ} wrong cells)`
+      );
+    }
+    if (mode === "mosaic") {
+      check(
+        wrongInterior === 0,
+        `mosaic: interior cells belong to exactly one colour part (${wrongInterior} wrong cells)`
+      );
+    }
+
+    // Smooth inner edge: every vertex whose 2x2 neighbourhood straddles the
+    // ring contour is emitted exactly on the true offset circle.
+    let straddle = 0;
+    let onContour = 0;
+    const meshVertices = new Set<string>();
+    for (const m of proc.meshes) {
+      for (let t = 0; t < m.positions.length; t += 3) {
+        meshVertices.add(
+          m.positions[t].toFixed(5) + "," + m.positions[t + 1].toFixed(5)
+        );
+      }
+    }
+    for (let vy = 0; vy <= fh; vy++) {
+      for (let vx = 0; vx <= fw; vx++) {
+        const px = vx / sub;
+        const py = vy / sub;
+        const d = R - radiusPx(px, py);
+        if (Math.abs(d - borderPx) > 1.5 / sub) continue;
+        let ringIn = 0;
+        let total = 0;
+        for (let oy = -1; oy <= 0; oy++) {
+          for (let ox = -1; ox <= 0; ox++) {
+            const fx = vx + ox;
+            const fy = vy + oy;
+            if (fx < 0 || fy < 0 || fx >= fw || fy >= fh) continue;
+            const i = fy * fw + fx;
+            if (!fine.inside[i]) continue;
+            total++;
+            if (R - radiusPx((fx + 0.5) / sub, (fy + 0.5) / sub) <= borderPx) {
+              ringIn++;
+            }
+          }
+        }
+        if (!(ringIn > 0 && ringIn < total)) continue;
+        // radial projection of the grid vertex onto the offset circle
+        const pr = radiusPx(px, py);
+        const targetR = R - borderPx;
+        const tx = cpx + ((px - cpx) / pr) * targetR;
+        const ty = cpy + ((py - cpy) / pr) * targetR;
+        straddle++;
+        if (
+          meshVertices.has(
+            (tx * pixelSize).toFixed(5) + "," + ((BH - ty) * pixelSize).toFixed(5)
+          )
+        ) {
+          onContour++;
+        }
+      }
+    }
+    check(
+      straddle > 8 && onContour === straddle,
+      `${mode}: every ring-boundary vertex sits on the true offset circle (${onContour}/${straddle})`
+    );
+  }
 }
 
 console.log("curvature:");

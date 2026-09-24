@@ -131,6 +131,12 @@ frame around the image). Border rendering per mode:
 - Lithophane: maximum thickness (darkest backlit)
 - CMYK: solid dark (full CMY + max white)
 
+The border ring is not rasterised per pixel: it is classified per fine cell
+against the true distance to the shape boundary, so it reaches exactly out
+to the smooth silhouette (no ragged band of interior treatment short of the
+edge) and its inner edge is snapped onto the shape's inward offset — exactly
+as smooth as the outline itself.
+
 ### Smooth shape edges
 
 The shape outline is not rasterised: the pixel grid is refined 2-4x along the
@@ -142,11 +148,17 @@ a blocky pixel staircase — the mesh never protrudes past the true outline
 grid). Every part clips to the same silhouette, so multi-colour plates still
 tile with no gaps or overlaps.
 
-Meshes stay manifold — diagonal pinch points (thin diagonal connections),
-z-saddle corners (two diagonal cells of different heights touching along an
-edge) and near-coincident layers are repaired by sub-pixel nudges, invisible
-at print scale. The test suite sweeps randomised noise images across every
-mode, shape, size and curvature to keep that guarantee.
+Meshes stay manifold — diagonal pinch points (thin diagonal connections) and
+near-coincident layers are repaired by sub-pixel nudges, invisible at print
+scale. A diagonal contact is only ever cleared when another part of the plate
+covers the cleared cell, so the repair can never punch a hole in the combined
+plate along the outline; where no other part covers it, the zero-volume
+point contact is left for the slicer's automatic repair, exactly as the
+per-pixel builder always produced. The test suite sweeps randomised noise
+images across every mode, shape, size and curvature — plus a border-ring
+suite that verifies the ring reaches the silhouette, owns exactly the
+border part(s) per mode, and follows the shape's inward offset — to keep
+those guarantees.
 
 ## Curvature
 

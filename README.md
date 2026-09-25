@@ -1,8 +1,8 @@
-# Image → 4-Color 3D Print
+# Image → Multi-Color 3D Print
 
 A small Next.js web app that turns any uploaded image into a **3D-printable
-plate** (default **5 mm thick**) — as a flat 4-color multi-material mosaic,
-a HueForge-style layered relief, a single-filament lithophane, or a
+plate** (default **5 mm thick**) — as a flat multi-color mosaic (2–16 filaments),
+a HueForge-style layered relief (2–16 filaments), a single-filament lithophane, or a
 full-color **CMYK lithophane** (Cyan / Magenta / Yellow / White filaments).
 
 Everything runs **client-side in the browser**: no server, no uploads.
@@ -14,9 +14,11 @@ Everything runs **client-side in the browser**: no server, no uploads.
 2. **Downscale** — the image is reduced to a printable pixel grid
    (adjustable, default 120 px on the longest side). No dithering: dither
    dots are too small to print.
-3. **Quantize to 4 colors** — median-cut + farthest-point seeded k-means
-   (`lib/quantize.ts`). You can click any swatch to match the palette to
-   your actual filaments; pixels are re-assigned to the nearest color.
+3. **Quantize colors** — median-cut + farthest-point seeded k-means
+   (`lib/quantize.ts`). For mosaic and layered modes, you can choose the
+   number of colors (2–16 filaments, default 4). You can click any swatch to
+   match the palette to your actual filaments; pixels are re-assigned to the
+   nearest color.
 4. **Mesh generation** — each color part becomes a manifold heightfield:
    top/bottom sheets per cell plus side faces only where the solid ends or
    the Z range changes (`lib/mesh.ts`), so every mesh edge is shared by
@@ -25,10 +27,10 @@ Everything runs **client-side in the browser**: no server, no uploads.
    With a shape selected, the mesh is clipped to the exact silhouette so the
    outline is smooth rather than pixel-stepped (see *Smooth shape edges*).
 5. **Export** (`lib/exporters.ts`):
-   - **3MF** — one file containing 4 parts (one per color) with a
+   - **3MF** — one file containing the individual parts (one per color) with a
      `m:colorgroup` (3MF materials extension) carrying the filament colors.
      Bambu Studio parses the colorgroup and auto-assigns each part to its
-     own extruder (1–4). In PrusaSlicer, import as *one object with multiple
+     own extruder (1–N). In PrusaSlicer, import as *one object with multiple
      parts* and assign extruders.
    - **STL zip** — one binary STL per color, all sharing the same origin, for
      slicers that prefer separate STLs.
@@ -36,14 +38,14 @@ Everything runs **client-side in the browser**: no server, no uploads.
 ## Print modes
 
 **Mosaic (flat, uniform thickness)** — each color region is a solid prism the
-full plate thickness, side by side in the XY plane. Classic 4-filament
-multi-material print (AMS/MMU).
+full plate thickness, side by side in the XY plane. Multi-material print
+(2–16 filaments, e.g. AMS / MMU).
 
-**Layered (HueForge-style relief)** — the 4 filaments are stacked in Z:
-Filament 1 (darkest) at the bottom, Filament 4 at the top. Each pixel's
-column stops at the top of its own color's band, so the visible top face of
-every pixel is printed in its assigned color and the plate becomes a
-variable-height relief. Band boundaries snap to whole multiples of the
+**Layered (HueForge-style relief)** — the filaments (2–16, default 4) are stacked
+in Z: Filament 1 (darkest) at the bottom, through to the lightest filament at
+the top. Each pixel's column stops at the top of its own color's band, so the
+visible top face of every pixel is printed in its assigned color and the plate
+becomes a variable-height relief. Band boundaries snap to whole multiples of the
 chosen print layer height, and the app shows you exactly where to swap
 filaments ("swap at z = 1.2, 2.6, 3.8 mm · layers 7, 13, 20"), mirroring
 HueForge's swap instructions. Slice with the same layer height you selected
@@ -215,9 +217,9 @@ both pixelated and smoothed surfaces.
   lower the resolution or increase the plate width.
 - 5 mm at 0.2 mm layer height = 25 layers; every color prints on every
   layer, so expect plenty of filament swaps — that's normal for a mosaic.
-- In layered mode there are only 3 filament swaps total (at the band
-  boundaries), but note the plate height varies per pixel — darkest color
-  regions are the thinnest.
+- In layered mode there are only (N - 1) filament swaps total (at the band
+  boundaries, e.g. 3 swaps for 4 colors), but note the plate height varies per
+  pixel — darkest color regions are the thinnest.
 - For truer HueForge color blending, pick filaments by their Transmission
   Distance (TD) and order the stack dark → light (the auto-detected palette
   is already sorted that way).

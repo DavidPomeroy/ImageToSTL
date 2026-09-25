@@ -316,14 +316,6 @@ export default function Home() {
                 onBorderMm={setBorderMm}
                 onCurveDeg={setCurveDeg}
               />
-              {processed && processed.pixelSizeMm < 0.4 && (
-                <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
-                  One pixel is {processed.pixelSizeMm.toFixed(2)}&nbsp;mm —
-                  finer than a typical 0.4&nbsp;mm nozzle can reproduce. Lower
-                  the resolution or increase the plate width for cleaner
-                  prints.
-                </p>
-              )}
             </section>
 
             {processed && (mode === "mosaic" || mode === "layered") && (
@@ -564,6 +556,15 @@ export default function Home() {
                     </dl>
                   </div>
                 </div>
+
+                {processed.pixelSizeMm < 0.4 && (
+                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
+                    One pixel is {processed.pixelSizeMm.toFixed(2)}&nbsp;mm —
+                    finer than a typical 0.4&nbsp;mm nozzle can reproduce. Lower
+                    the resolution or increase the plate width for cleaner
+                    prints.
+                  </p>
+                )}
 
                 <div className="relative h-[500px] overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/60 to-zinc-950">
                     <Preview3D processed={processed} fitNonce={fitNonce} />

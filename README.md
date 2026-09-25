@@ -89,7 +89,9 @@ npx tsx scripts/test-core.ts
 ```
 
 Covers quantization quality (k-means must recover 4 known clusters), rect
-merging, geometry bounds, binary STL layout, and 3MF zip/XML structure.
+merging, geometry bounds, wall orientation (outward-facing walls, signed volume
+against the fine-cell reference, directed-edge consistency), binary STL layout,
+and 3MF zip/XML structure.
 
 ## Project layout
 
@@ -108,11 +110,13 @@ scripts/           core-logic test
 
 - Meshes are manifold (boundary-only heightfield meshing) — no non-manifold
   repair prompts.
-- On import, Bambu Studio shows its standard color-mapping dialog (the same
-  one used for colored OBJ/3MF imports): it lists the part colors and lets
-  you confirm the filament mapping — click OK and each part lands on its own
-  extruder. Parts also carry per-object extruder metadata
-  (`Metadata/model_settings.config`) so the assignment is pre-set.
+- On import, the 3MF loads as a **single object with multiple parts** (one
+  assembly object referencing one mesh object per color), so the parts stay
+  aligned and each takes one extruder. Bambu Studio shows its standard
+  color-mapping dialog (the same one used for colored OBJ/3MF imports): it
+  lists the part colors and lets you confirm the filament mapping — click OK
+  and each part lands on its own extruder. Parts also carry per-part extruder
+  metadata (`Metadata/model_settings.config`) so the assignment is pre-set.
 - Bambu Studio deliberately ignores project settings
   (`Metadata/project_settings.config`) in files it did not create, so the
   filament colors come from the color-mapping dialog / your own filament
@@ -161,6 +165,15 @@ images across every mode, shape, size and curvature — plus a border-ring
 suite that verifies the ring reaches the silhouette, owns exactly the
 border part(s) per mode, and follows the shape's inward offset — to keep
 those guarantees.
+
+Every side wall is also emitted **outward-facing**, so a shaped plate is not
+merely watertight but positively oriented: summing the divergence over a part's
+triangles returns the volume of the material that part carries (the suite
+compares the clipped square's signed volume against the fine-cell reference
+exactly, and asserts every directed mesh edge has an opposite twin). That
+matters on screen as much as in the slicer — a back-facing wall is culled by
+single-sided renderers (which reads as a gap along that outline edge) and an
+inside-out part is what makes a slicer flag the file.
 
 Uniform areas of the top/bottom sheets are emitted as merged runs instead of
 per-fine-cell quads (with per-column break sets — unioned over every row *and*

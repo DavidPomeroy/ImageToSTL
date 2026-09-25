@@ -47,7 +47,7 @@ function Slider({ label, value, min, max, step, unit, onChange }: SliderProps) {
 }
 
 const MODES = [
-  ["mosaic", "Mosaic", "flat · 4 filaments"],
+  ["mosaic", "Mosaic", "flat multi-material"],
   ["layered", "Layered", "HueForge relief"],
   ["lithophane", "Lithophane", "backlit · 1 filament"],
   ["cmyk", "CMYK", "color litho · 4 filaments"],
@@ -55,7 +55,7 @@ const MODES = [
 
 const DESCRIPTIONS: Record<PrintMode, string> = {
   mosaic:
-    "Mosaic: each of the 4 colors is a separate part side by side, all the same thickness — print with 4 filaments on a multi-material printer (Bambu AMS, Prusa MMU, toolchanger).",
+    "Mosaic: each color is a separate part side by side, all the same thickness — print on a multi-material printer (Bambu AMS, Prusa MMU, toolchanger).",
   layered:
     "Layered: filaments are stacked bottom → top (Filament 1 at the base). Each pixel's column stops at the top of its color's band — a HueForge-style variable-height relief.",
   lithophane:
@@ -66,6 +66,7 @@ const DESCRIPTIONS: Record<PrintMode, string> = {
 
 export default function Controls(props: {
   mode: PrintMode;
+  colorCount: number;
   resolution: number;
   widthMm: number;
   depthMm: number;
@@ -80,6 +81,7 @@ export default function Controls(props: {
   borderMm: number;
   curveDeg: number;
   onMode: (m: PrintMode) => void;
+  onColorCount: (v: number) => void;
   onResolution: (v: number) => void;
   onWidthMm: (v: number) => void;
   onDepthMm: (v: number) => void;
@@ -97,6 +99,7 @@ export default function Controls(props: {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
   const cmyk = props.mode === "cmyk";
+  const paletteMode = props.mode === "mosaic" || props.mode === "layered";
   return (
     <div className="space-y-4">
       <div>
@@ -149,6 +152,18 @@ export default function Controls(props: {
             ))}
           </div>
         </div>
+      )}
+
+      {paletteMode && (
+        <Slider
+          label="Number of colors"
+          value={props.colorCount}
+          min={2}
+          max={16}
+          step={1}
+          unit=" filaments"
+          onChange={props.onColorCount}
+        />
       )}
 
       <Slider

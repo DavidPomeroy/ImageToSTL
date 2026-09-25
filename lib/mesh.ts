@@ -421,7 +421,18 @@ export function buildShapeClippedGeometry(
   fine: FineShapeGrid,
   smooth = false,
   ring?: RingSpec | null,
-  othersSolid?: Uint8Array | null
+  othersSolid?: Uint8Array | null,
+  /**
+   * Optional per-pixel material mask. Default (null) is "this pixel's band is
+   * non-degenerate" (z1 > z0 + 1e-9). Stacked parts whose bands are written
+   * from shared boundary arrays pass their own channel's layer mask here, so
+   * the z values can describe the boundary for smoothing without a channel
+   * without layers being taken for material.
+   */
+  solidMask?: Uint8Array | null,
+  /** Optional per-sheet blend supports (see sampleSheets). */
+  sheetSupport0?: Uint8Array | null,
+  sheetSupport1?: Uint8Array | null
 ): TriangleSoup {
   const out: TriangleSoup = [];
   const sub = fine.sub;
@@ -432,7 +443,8 @@ export function buildShapeClippedGeometry(
   const vh = fh + 1;
   const EPS_AREA = 1e-10;
   const parentSolid = (i: number): boolean =>
-    i >= 0 && z1s[i] > z0s[i] + 1e-9;
+    i >= 0 &&
+    (solidMask ? solidMask[i] === 1 : z1s[i] > z0s[i] + 1e-9);
 
   // fine cell states: 0 = empty, 1 = solid, 2 = solid parent clipped by shape
   // Ring cells (inside the shape within `ring.px` of its boundary) override
@@ -544,7 +556,15 @@ export function buildShapeClippedGeometry(
   // Per-vertex z sheets (smooth relief) or per-fine-cell flat z values.
   let sheets: { v0: Float32Array; v1: Float32Array } | null = null;
   if (smooth) {
-    sheets = sampleSheets(z0s, z1s, gw, gh, sub);
+    sheets = sampleSheets(
+      z0s,
+      z1s,
+      gw,
+      gh,
+      sub,
+      sheetSupport0 ?? null,
+      sheetSupport1 ?? null
+    );
     // In the border ring the relief is the border's flat z, not the image
     // data: override every vertex that touches a ring cell (ring cells
     // themselves, and the shared edge with the first interior cells, so the
@@ -983,6 +1003,17 @@ export function buildShapeClippedGeometry(
   // the two cells — this covers silhouette walls, transparent-pixel walls,
   // and z-step faces between adjacent solid cells of different heights,
   // keeping every mesh edge shared by exactly two triangles.
+  //
+  // WINDING CONVENTION for wallSegment / stripsBetween: both helpers emit
+  // their triangles in a fixed order, so the face they produce points along
+  // `normal ∝ (Uy, -Ux)` with `U = B - A` for the "solid on A" branch (and the
+  // opposite for the other). An edge must therefore be passed A -> B so that
+  // this normal points AWAY from the material: A -> B has to run clockwise
+  // around the solid seen from +Z. A wall emitted the other way round is
+  // back-facing: single-sided renderers (the 3D preview) cull it — which reads
+  // as a gap along the outline — and slicers see an inside-out solid. The
+  // order never moves any vertex (the guards and z strips are symmetric), so
+  // it is purely an orientation choice.
   const wallSegment = (ai: number, bi: number, solidOnA: boolean): void => {
     // guard: snapping can collapse a wall to zero width (e.g. at a sharp
     // star tip where both edge vertices project to the same boundary point)
@@ -1027,12 +1058,15 @@ export function buildShapeClippedGeometry(
         const i = fy * fw + fx;
         if (state[i] !== 1) continue;
         if (cell(fx, fy - 1) !== 1) {
-          const vi = fy * vw + fx; // north edge, outward +Y
-          wallSegment(vi, vi + 1, true);
+          // north edge, outward +Y: A -> B must run -X (right to left) so the
+          // emitted face points away from the cell (see winding convention)
+          const vi = fy * vw + fx;
+          wallSegment(vi + 1, vi, true);
         }
         if (cell(fx, fy + 1) !== 1) {
-          const vi = (fy + 1) * vw + fx; // south edge, outward -Y
-          wallSegment(vi + 1, vi, true);
+          // south edge, outward -Y: A -> B must run +X (left to right)
+          const vi = (fy + 1) * vw + fx;
+          wallSegment(vi, vi + 1, true);
         }
       }
     }
@@ -1040,7 +1074,10 @@ export function buildShapeClippedGeometry(
     // For a fine-grid edge between cell intervals [a0,a1] and [b0,b1]
     // (non-solid cell = no interval), emit a wall strip for every global-cut
     // strip that is solid in exactly one of the two cells. `ai`/`bi` are the
-    // edge's vertex indices, ordered so faces point away from the solid side.
+    // edge's vertex indices in the A -> B order that makes the emitted faces
+    // point away from the solid (see the winding convention above): for an
+    // east-west edge that is bottom -> top, for a north-south edge it is
+    // left -> right.
     const stripsBetween = (
       aSolid: boolean,
       a0: number,
@@ -1066,11 +1103,11 @@ export function buildShapeClippedGeometry(
         const inB = bSolid && b0 < mid && mid < b1;
         if (inA === inB) continue;
         if (inA) {
-          // solid only west/north of the edge -> face points +X/+Y
+          // solid only on the A side of the edge -> face points away from it
           pushTri(out, posX[ai], posY[ai], lo, posX[bi], posY[bi], lo, posX[bi], posY[bi], hi);
           pushTri(out, posX[ai], posY[ai], lo, posX[bi], posY[bi], hi, posX[ai], posY[ai], hi);
         } else {
-          // solid only east/south of the edge -> face points -X/-Y
+          // solid only on the B side -> face points the other way
           pushTri(out, posX[ai], posY[ai], lo, posX[bi], posY[bi], hi, posX[bi], posY[bi], lo);
           pushTri(out, posX[ai], posY[ai], lo, posX[ai], posY[ai], hi, posX[bi], posY[bi], hi);
         }
@@ -1085,7 +1122,9 @@ export function buildShapeClippedGeometry(
         const as = aIdx >= 0 && state[aIdx] === 1;
         const bs = bIdx >= 0 && state[bIdx] === 1;
         if (!as && !bs) continue;
-        // edge vertices: top (fy), bottom (fy+1)
+        // edge vertices: top (fy), bottom (fy+1) — passed BOTTOM first so the
+        // emitted faces point away from the solid (winding convention above;
+        // a top-first order made every east-west wall back-facing)
         const aTop = fy * vw + vx;
         const aBot = aTop + vw;
         stripsBetween(
@@ -1095,8 +1134,8 @@ export function buildShapeClippedGeometry(
           bs,
           bs ? fz0[bIdx] : 0,
           bs ? fz1[bIdx] : 0,
-          aTop,
-          aBot
+          aBot,
+          aTop
         );
       }
     }
@@ -1163,13 +1202,26 @@ function sampleSheets(
   z1s: Float32Array | number[],
   gw: number,
   gh: number,
-  sub: number
+  sub: number,
+  /**
+   * Optional per-sheet support masks. Default (null) is the part's own filled
+   * pixels. Stacked parts pass the shared interface masks (see
+   * `interfaceSupport` in the pipeline): the top sheet must be the same
+   * function of the boundary arrays wherever EITHER neighbour carries the
+   * part below or above it, otherwise the two interpolations disagree at a
+   * shared interface and the parts interpenetrate.
+   */
+  support0?: Uint8Array | null,
+  support1?: Uint8Array | null
 ): { v0: Float32Array; v1: Float32Array } {
   const vw = gw * sub + 1;
   const vh = gh * sub + 1;
   const v0 = new Float32Array(vw * vh);
   const v1 = new Float32Array(vw * vh);
-  const solid = (i: number) => i >= 0 && z1s[i] > z0s[i] + 1e-9;
+  const solid0 = (i: number) =>
+    i >= 0 && (support0 ? support0[i] === 1 : z1s[i] > z0s[i] + 1e-9);
+  const solid1 = (i: number) =>
+    i >= 0 && (support1 ? support1[i] === 1 : z1s[i] > z0s[i] + 1e-9);
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x);
 
   for (let vy = 0; vy < vh; vy++) {
@@ -1184,29 +1236,32 @@ function sampleSheets(
       const x1 = Math.min(gw - 1, x0 + 1);
       const tx = Math.max(0, Math.min(1, cx - x0));
 
-      // gather the (up to 4) surrounding pixels, filled only
+      // gather the (up to 4) surrounding pixels, filled only — each sheet
+      // blends over its own support, so shared interfaces use the same pixels
+      // on both sides
       const ids = [at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1)];
-      let wSum = 0;
+      let wSum0 = 0;
+      let wSum1 = 0;
       let lo = 0;
       let hi = 0;
-      const ws = [0, 0, 0, 0];
       for (let k = 0; k < 4; k++) {
         const i = ids[k];
-        if (!solid(i)) continue;
         const wx = k % 2 === 0 ? 1 - tx : tx;
         const wy = k < 2 ? 1 - ty : ty;
         const w = wx * wy;
-        if (w <= 0) continue;
-        ws[k] = w;
-        wSum += w;
-        lo += z0s[i] * w;
-        hi += z1s[i] * w;
+        if (w <= 0 || i < 0) continue;
+        if (solid0(i)) {
+          wSum0 += w;
+          lo += z0s[i] * w;
+        }
+        if (solid1(i)) {
+          wSum1 += w;
+          hi += z1s[i] * w;
+        }
       }
       const vi = vy * vw + vx;
-      if (wSum > 1e-12) {
-        v0[vi] = lo / wSum;
-        v1[vi] = hi / wSum;
-      }
+      if (wSum0 > 1e-12) v0[vi] = lo / wSum0;
+      if (wSum1 > 1e-12) v1[vi] = hi / wSum1;
     }
   }
   return { v0, v1 };
@@ -1225,14 +1280,28 @@ export function buildSmoothHeightfieldGeometry(
   gw: number,
   gh: number,
   pixelSize: number,
-  sub = 2
+  sub = 2,
+  /** Optional material mask (see buildShapeClippedGeometry). */
+  solidMask?: Uint8Array | null,
+  /** Optional per-sheet blend supports (see sampleSheets). */
+  sheetSupport0?: Uint8Array | null,
+  sheetSupport1?: Uint8Array | null
 ): TriangleSoup {
   const out: TriangleSoup = [];
   const s = pixelSize / sub; // sub-cell size
   const vw = gw * sub + 1;
   const vh = gh * sub + 1;
-  const { v0, v1 } = sampleSheets(z0s, z1s, gw, gh, sub);
-  const solid = (i: number) => i >= 0 && z1s[i] > z0s[i] + 1e-9;
+  const { v0, v1 } = sampleSheets(
+    z0s,
+    z1s,
+    gw,
+    gh,
+    sub,
+    sheetSupport0 ?? null,
+    sheetSupport1 ?? null
+  );
+  const solid = (i: number) =>
+    i >= 0 && (solidMask ? solidMask[i] === 1 : z1s[i] > z0s[i] + 1e-9);
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x);
 
   const cellX = (x: number) => x * s;

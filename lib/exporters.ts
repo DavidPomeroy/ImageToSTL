@@ -161,7 +161,7 @@ export function build3MFModelXml(parts: ExportPart[]): string {
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
-  <metadata name="Title">4-color image print</metadata>
+  <metadata name="Title">${parts.length === 1 ? "1-color image print" : `${parts.length}-color image print`}</metadata>
   <metadata name="Application">image-to-4color-3dprint</metadata>
   <resources>
     <m:colorgroup id="1">

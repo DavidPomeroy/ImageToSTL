@@ -138,6 +138,22 @@ const grid = mapPixelsToPalette(data, palette);
 check(grid.length === W * H, "grid has one entry per pixel");
 check(grid[0] === EMPTY, "transparent pixel maps to EMPTY");
 
+console.log("variable palette quantization (2, 5, 8 colors, and empty buffer):");
+for (const k of [2, 5, 8]) {
+  const pK = autoPalette(collectPixels(data), k);
+  check(pK.length === k, `autoPalette returns ${k} colors for k=${k} (got ${pK.length})`);
+  const mosaicK = processImageData(quadImage, pK, 40, 5, "mosaic");
+  check(mosaicK.meshes.length === k, `mosaic ${k}-color: ${k} parts`);
+  for (const m of mosaicK.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `mosaic ${k}-color ${m.name}: manifold (${bad} bad edges)`);
+  }
+}
+const emptyPal2 = autoPalette([], 2);
+check(emptyPal2.length === 2, `autoPalette fallback on empty pixels produces 2 colors (got ${emptyPal2.length})`);
+const emptyPal8 = autoPalette([], 8);
+check(emptyPal8.length === 8, `autoPalette fallback on empty pixels produces 8 colors (got ${emptyPal8.length})`);
+
 console.log("mosaic mode:");
 const mosaic = processImageData(quadImage, palette, 40, 5, "mosaic");
 check(mosaic.meshes.length === 4, "mosaic: 4 parts");
@@ -1381,6 +1397,32 @@ async function main() {
     Object.keys(szip.files).filter((n) => n.endsWith(".stl")).length === 4,
     "STL zip contains 4 files"
   );
+
+  // variable count 3MF export (e.g. 6-part export)
+  const p6 = autoPalette(collectPixels(data), 6);
+  const mosaic6 = processImageData(quadImage, p6, 40, 5, "mosaic");
+  const p6Parts = meshPartPositions(mosaic6);
+  check(p6Parts.length === 6, "6-part positions length is 6");
+  const m6Blob = await build3MF(p6Parts);
+  const m6Zip = await JSZip.loadAsync(await m6Blob.arrayBuffer());
+  const m6Model = await m6Zip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (m6Model.match(/<object /g) || []).length === 6,
+    "6-color 3MF has 6 objects"
+  );
+  check(
+    (m6Model.match(/<m:color /g) || []).length === 6,
+    "6-color 3MF colorgroup has 6 colors"
+  );
+  check(
+    m6Model.includes("<metadata name=\"Title\">6-color image print</metadata>"),
+    "6-color 3MF metadata title is 6-color"
+  );
+  const m6ms = await m6Zip.file("Metadata/model_settings.config")!.async("string");
+  check((m6ms.match(/<object /g) || []).length === 6, "6-color model_settings has 6 objects");
+  const m6ps = JSON.parse(await m6Zip.file("Metadata/project_settings.config")!.async("string"));
+  check(m6ps.filament_colour.length === 6, "6-color project settings has 6 filament colours");
+  check(m6ps.nozzle_diameter.length === 6, "6-color project settings has 6 nozzle diameters");
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);

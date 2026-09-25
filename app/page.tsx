@@ -53,6 +53,7 @@ export default function Home() {
   const [imageName, setImageName] = useState("image");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<PrintMode>("mosaic");
+  const [colorCount, setColorCount] = useState(4);
   const [resolution, setResolution] = useState(120);
   const [widthMm, setWidthMm] = useState(100);
   const [depthMm, setDepthMm] = useState(5);
@@ -111,15 +112,15 @@ export default function Home() {
     [image, debouncedResolution]
   );
 
-  // auto-detect the 4 colors whenever the (downscaled) image changes
+  // auto-detect palette colors whenever the (downscaled) image or target color count changes
   useEffect(() => {
     if (!imageData) return;
-    setPalette(autoPalette(collectPixels(imageData.data), 4));
-  }, [imageData]);
+    setPalette(autoPalette(collectPixels(imageData.data), colorCount));
+  }, [imageData, colorCount]);
 
   const regeneratePalette = useCallback(() => {
-    if (imageData) setPalette(autoPalette(collectPixels(imageData.data), 4));
-  }, [imageData]);
+    if (imageData) setPalette(autoPalette(collectPixels(imageData.data), colorCount));
+  }, [imageData, colorCount]);
 
   useEffect(() => {
     if (
@@ -215,7 +216,7 @@ export default function Home() {
       ? `${imageName}-cmyk-lithophane`
       : mode === "lithophane"
         ? `${imageName}-lithophane`
-        : `${imageName}-4color-${mode}`;
+        : `${imageName}-${palette.length}color-${mode}`;
 
   const download3MF = useCallback(async () => {
     if (!hasGeometry) return;
@@ -285,6 +286,7 @@ export default function Home() {
               </div>
               <Controls
                 mode={mode}
+                colorCount={colorCount}
                 resolution={resolution}
                 widthMm={widthMm}
                 depthMm={depthMm}
@@ -299,6 +301,7 @@ export default function Home() {
                 borderMm={borderMm}
                 curveDeg={curveDeg}
                 onMode={setMode}
+                onColorCount={setColorCount}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
                 onDepthMm={setDepthMm}
@@ -395,8 +398,8 @@ export default function Home() {
                       Generating your plate…
                     </h3>
                     <p className="mt-1 max-w-sm text-sm text-zinc-500">
-                      Downscaling, quantizing to 4 colors and building the
-                      meshes — please wait a moment.
+                      Downscaling, quantizing colors and building the meshes —
+                      please wait a moment.
                     </p>
                   </>
                 ) : (
@@ -591,7 +594,7 @@ export default function Home() {
                       ? "One single-filament part: print flat with the relief side up, white or natural PLA, high infill (or several walls). Hold the print in front of a light — thin areas glow bright, thick areas stay dark."
                       : processed.mode === "cmyk"
                         ? "4 parts in print order — Cyan (bottom), Magenta, Yellow, then the White relief on top. Import the 3MF as one object with multiple parts (or all 4 STLs aligned at the origin) and assign each part its filament. Slice with the layer height you set, then backlight the print."
-                        : "The 3MF bundles all 4 color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all 4 files together, aligned at the origin."}
+                        : `The 3MF bundles all ${exportParts.length} color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all files together, aligned at the origin.`}
                   </p>
                   {processed.mode === "layered" && swapBands.length > 0 && (
                     <p className="mb-4 max-w-2xl rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-emerald-300/90">
@@ -616,7 +619,7 @@ export default function Home() {
                           ? "Updating model…"
                           : mode === "lithophane"
                             ? "Download 3MF"
-                            : "Download 3MF (4 color parts)"}
+                            : `Download 3MF (${exportParts.length} color parts)`}
                     </button>
                     <button
                       type="button"
@@ -631,7 +634,7 @@ export default function Home() {
                           ? "Updating model…"
                           : mode === "lithophane"
                             ? "Download STL"
-                            : "Download STL zip (4 files)"}
+                            : `Download STL zip (${exportParts.length} files)`}
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-zinc-600">

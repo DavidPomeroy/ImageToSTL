@@ -264,12 +264,24 @@ function inertia(pixels: RGB[], centers: RGB[]): number {
   return sum;
 }
 
+/** Fallback palette generator when pixel input is empty or insufficient. */
+function fallbackPalette(count: number): RGB[] {
+  if (count <= 0) return [];
+  if (count === 1) return [[128, 128, 128]];
+  const out: RGB[] = [];
+  for (let i = 0; i < count; i++) {
+    const v = Math.round((i / (count - 1)) * 255);
+    out.push([v, v, v]);
+  }
+  return out;
+}
+
 /**
  * Full auto-palette: run k-means from two independent seeds (median-cut and
  * farthest-point) and keep whichever clusters the image better.
  */
 export function autoPalette(pixels: RGB[], count = 4): RGB[] {
-  if (pixels.length === 0) return [];
+  if (pixels.length === 0) return fallbackPalette(count);
   const candidates = [medianCut(pixels, count), farthestPointSeeds(pixels, count)];
   let best: RGB[] | null = null;
   let bestInertia = Infinity;
@@ -282,7 +294,17 @@ export function autoPalette(pixels: RGB[], count = 4): RGB[] {
       best = centers;
     }
   }
-  const result = best ?? candidates[0];
+  let result = best ?? candidates[0] ?? [];
+  if (result.length < count) {
+    // If fewer distinct colors than requested were found, pad with fallback colors
+    const fallback = fallbackPalette(count);
+    for (const fb of fallback) {
+      if (result.length >= count) break;
+      if (!result.some((c) => c[0] === fb[0] && c[1] === fb[1] && c[2] === fb[2])) {
+        result.push(fb);
+      }
+    }
+  }
   return result.slice().sort((a, b) => luminance(a) - luminance(b));
 }
 

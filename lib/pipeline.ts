@@ -32,6 +32,7 @@ import {
   buildSmoothHeightfieldGeometry,
   computeRingMask,
   makeFineShapeGrid,
+  quantizeZ,
   type FineShapeGrid,
   type RingSpec,
 } from "./mesh";
@@ -342,9 +343,10 @@ export function processImageData(
     // the fine grid covers the whole plate, so keep total fine cells in
     // check (sub=4 => 16x the per-pixel geometry).
     // Budget the refinement across all colour parts (lithophane is a single
-    // part, everything else has four), so the total triangle count stays in
-    // the low millions even at the highest resolutions.
-    const parts = mode === "lithophane" ? 1 : 4;
+    // part, CMYK has 4, mosaic/layered uses palette.length), so the total
+    // triangle count stays in the low millions even at the highest resolutions.
+    const parts =
+      mode === "lithophane" ? 1 : mode === "cmyk" ? 4 : Math.max(1, palette.length);
     const sub = Math.max(
       1,
       Math.min(
@@ -396,7 +398,10 @@ export function processImageData(
     z1s: Float32Array,
     useSmooth = smooth,
     ring?: RingSpec | null,
-    othersSolid?: Uint8Array | null
+    othersSolid?: Uint8Array | null,
+    solidMask?: Uint8Array | null,
+    sheetSupport0?: Uint8Array | null,
+    sheetSupport1?: Uint8Array | null
   ): number[] =>
     fine
       ? buildShapeClippedGeometry(
@@ -408,10 +413,23 @@ export function processImageData(
           fine,
           useSmooth,
           ring ?? null,
-          othersSolid ?? null
+          othersSolid ?? null,
+          solidMask ?? null,
+          sheetSupport0 ?? null,
+          sheetSupport1 ?? null
         )
       : useSmooth
-        ? buildSmoothHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize)
+        ? buildSmoothHeightfieldGeometry(
+            z0s,
+            z1s,
+            gw,
+            gh,
+            pixelSize,
+            undefined,
+            solidMask ?? null,
+            sheetSupport0 ?? null,
+            sheetSupport1 ?? null
+          )
         : buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize);
 
   // ---- CMYK lithophane: C/M/Y color layers + white relief, 4 parts
@@ -457,10 +475,6 @@ export function processImageData(
       if (t > maxZ) maxZ = t;
     }
 
-    // Border ring: the ring cells of every part span the full border stack
-    // (full CMY + max white), exactly as a fully-covered border pixel did.
-    // All four parts share the ring, so a ring cell may be cleared by the
-    // diagonal-contact repair without opening a hole in the plate.
     const ringPx = borderMm / pixelSize;
     const ringSpec: RingSpec | null = ringMask
       ? { px: ringPx, mask: ringMask, owns: true, othersOwnRing: true, z0: 0, z1: 0 }
@@ -491,44 +505,122 @@ export function processImageData(
 
     const z0s = new Float32Array(n);
     const z1s = new Float32Array(n);
-    const base = new Float32Array(n); // z where the current part starts
-    // Extend each band by a micron so adjacent pixels whose bands merely
-    // touch (one ends where the other starts) overlap slightly — this keeps
-    // each part manifold instead of leaving a point-contact pinch edge.
+    // Shared interface fields. Boundary k (between channel k-1 and k) is ONE
+    // height per pixel (bnd[k][i]), so neighbours always agree on where bands
+    // start and end. Flat bands pad+lift each channel (loPad/hiPad): touching
+    // cells of the SAME part overlap by 2*EPS (a shared face instead of the
+    // 4-way point contact a slicer refuses to repair) while consecutive parts
+    // meet exactly face-to-face. Smooth sheets CANNOT pad per-part (the two
+    // sides would interpolate different fields and interpenetrate by tens of
+    // microns), so smooth builds use the exact nominal boundaries with no
+    // lift: every sheet is then the same function of the same values, and
+    // shared vertices are bitwise identical. Touching cells of the same
+    // smooth part meet at exact shared vertices (as the shipped per-pixel
+    // smooth builder did) — no fusion overlap, and no shared volume with
+    // neighbours either.
     const EPS = 0.001;
-    const meshes: ColorMeshData[] = [];
-    for (const def of partDefs) {
+    /** Bottom z of stack channel `k` at a band starting at `base`. */
+    const loPad = (baseZ: number, k: number): number =>
+      baseZ > 1e-9 ? baseZ + EPS * (2 * k - 1) : 0;
+    /** Top z of a channel's band [base, base+h] at stack position `k`. */
+    const hiPad = (baseZ: number, h: number, k: number): number =>
+      baseZ + h + EPS * (2 * k + 1);
+    const bnd: Float32Array[] = [];
+    {
+      const run = new Float32Array(n);
+      bnd.push(run.slice());
+      for (const key of ["c", "m", "y", "w"] as const) {
+        const layers = stacks[key];
+        for (let i = 0; i < n; i++) run[i] += layers[i] * lh;
+        bnd.push(run.slice());
+      }
+    }
+    // Per-channel material. Smooth sheets share the union of ALL channels as
+    // their blend support (any pixel carrying any channel), and every smooth
+    // interface shares one universal lift so both sides stay identical.
+    const hasLayers = partDefs.map((def) => {
       const layers = stacks[def.key];
+      const m = new Uint8Array(n);
+      for (let i = 0; i < n; i++) if (layers[i] > 0) m[i] = 1;
+      return m;
+    });
+    const smoothSupport = smooth ? new Uint8Array(n) : null;
+    if (smoothSupport) {
+      for (let i = 0; i < n; i++) {
+        smoothSupport[i] =
+          hasLayers[0][i] || hasLayers[1][i] || hasLayers[2][i] || hasLayers[3][i]
+            ? 1
+            : 0;
+      }
+    }
+    // Smooth bands use the exact nominal shared boundaries (no lift — any
+    // per-part pad would differ between the two sides of an interface).
+    // Same-part touching cells meet at exact shared vertices (no gaps).
+    const zSmooth = (b: number): number => b;
+    const meshes: ColorMeshData[] = [];
+    partDefs.forEach((def, k) => {
       const ringLayers =
         def.key === "w" ? o.whiteMaxLayers : o.colorLayers;
       let count = 0;
       for (let i = 0; i < n; i++) {
-        if (layers[i] > 0) {
-          z0s[i] = Math.max(0, base[i] - EPS);
-          z1s[i] = base[i] + layers[i] * lh + EPS;
-          count++;
+        if (hasLayers[k][i]) count++;
+        if (smooth) {
+          // Smooth band: exact nominal shared boundaries, so both sides of
+          // an interface interpolate the same values.
+          z0s[i] = zSmooth(bnd[k][i]);
+          z1s[i] = zSmooth(bnd[k + 1][i]);
+        } else if (hasLayers[k][i]) {
+          // Flat bands use the exact shared, padded boundaries face-to-face.
+          z0s[i] = loPad(bnd[k][i], k);
+          z1s[i] = hiPad(bnd[k][i], bnd[k + 1][i] - bnd[k][i], k);
         } else {
-          z0s[i] = 0;
-          z1s[i] = 0;
+          z0s[i] = loPad(bnd[k][i], k);
+          z1s[i] = loPad(bnd[k][i], k);
         }
-        base[i] += layers[i] * lh;
       }
+      quantizeZ(z0s);
+      quantizeZ(z1s);
       if (ringSpec) {
-        ringSpec.z0 = Math.max(0, def.key === "c" ? -EPS : 0);
-        ringSpec.z1 =
-          (def.key === "c" ? 0 : o.colorLayers * lh * (def.key === "m" ? 1 : def.key === "y" ? 2 : 3)) +
-          ringLayers * lh +
-          EPS;
+        // The border ring is the same stack as a fully covered pixel: every
+        // channel owns its own slice of it (full CMY + max white in total).
+        // Flat slices use the padded face-to-face values; smooth slices use
+        // the exact nominal boundaries like the interior bands.
+        const below = k * o.colorLayers * lh;
+        const top = below + ringLayers * lh;
+        if (smooth) {
+          ringSpec.z0 = zSmooth(below);
+          ringSpec.z1 = zSmooth(top);
+        } else {
+          ringSpec.z0 = below > 1e-9 ? below + EPS * (2 * k - 1) : 0;
+          ringSpec.z1 = hiPad(below, ringLayers * lh, k);
+        }
       }
+      // Smooth: every part blends over the same universal support, so all
+      // sheets are the same function of the same interface values. Flat:
+      // each part blends over its own pixels only (exact face-to-face
+      // boundaries need no cross-part agreement, and wider support would
+      // taper the sheet over empty pixels).
+      const sup0 = smooth ? smoothSupport! : hasLayers[k];
+      const sup1 = smooth ? smoothSupport! : hasLayers[k];
+      const solidMask = hasLayers[k];
       meshes.push({
         color: def.color,
         name: def.name,
         pixelCount: count,
         z0: 0,
         z1: maxZ,
-        positions: buildMesh(z0s, z1s, smooth, ringSpec, othersSolid),
+        positions: buildMesh(
+          z0s,
+          z1s,
+          smooth,
+          ringSpec,
+          othersSolid,
+          solidMask,
+          sup0,
+          sup1
+        ),
       });
-    }
+    });
 
     if (curveDeg > 0.01) {
       let minZ = Infinity;

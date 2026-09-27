@@ -11,7 +11,131 @@ export type ShapeType =
   | "hexagon"
   | "circle"
   | "heart"
-  | "star";
+  | "star"
+  | "diamond"
+  | "cross"
+  | "tree"
+  | "snowflake"
+  | "stocking"
+  | "bell"
+  | "gingerbread-man"
+  | "gingerbread-woman"
+  | "pumpkin"
+  | "ghost"
+  | "bat"
+  | "leaf"
+  | "acorn"
+  | "egg"
+  | "bunny"
+  | "flower"
+  | "tulip"
+  | "butterfly"
+  | "sun"
+  | "shell"
+  | "starfish"
+  | "shamrock"
+  | "moon"
+  | "custom";
+
+export type ShapeCategory =
+  | "standard"
+  | "christmas"
+  | "halloween"
+  | "autumn"
+  | "easter"
+  | "spring"
+  | "summer"
+  | "occasions";
+
+export const SHAPE_CATEGORIES: {
+  id: ShapeCategory;
+  label: string;
+  shapes: { type: ShapeType; label: string }[];
+}[] = [
+  {
+    id: "standard",
+    label: "Standard",
+    shapes: [
+      { type: "square", label: "Square" },
+      { type: "triangle", label: "Triangle" },
+      { type: "hexagon", label: "Hexagon" },
+      { type: "circle", label: "Circle" },
+      { type: "heart", label: "Heart" },
+      { type: "star", label: "Star" },
+      { type: "diamond", label: "Diamond" },
+      { type: "cross", label: "Cross" },
+    ],
+  },
+  {
+    id: "christmas",
+    label: "Christmas",
+    shapes: [
+      { type: "tree", label: "Tree" },
+      { type: "snowflake", label: "Snowflake" },
+      { type: "stocking", label: "Stocking" },
+      { type: "bell", label: "Bell" },
+      { type: "gingerbread-man", label: "Gingerbread man" },
+      { type: "gingerbread-woman", label: "Gingerbread woman" },
+    ],
+  },
+  {
+    id: "halloween",
+    label: "Halloween",
+    shapes: [
+      { type: "pumpkin", label: "Pumpkin" },
+      { type: "ghost", label: "Ghost" },
+      { type: "bat", label: "Bat" },
+    ],
+  },
+  {
+    id: "autumn",
+    label: "Autumn",
+    shapes: [
+      { type: "leaf", label: "Leaf" },
+      { type: "acorn", label: "Acorn" },
+    ],
+  },
+  {
+    id: "easter",
+    label: "Easter",
+    shapes: [
+      { type: "egg", label: "Egg" },
+      { type: "bunny", label: "Bunny" },
+    ],
+  },
+  {
+    id: "spring",
+    label: "Spring",
+    shapes: [
+      { type: "flower", label: "Flower" },
+      { type: "tulip", label: "Tulip" },
+      { type: "butterfly", label: "Butterfly" },
+      { type: "shamrock", label: "Shamrock" },
+    ],
+  },
+  {
+    id: "summer",
+    label: "Summer",
+    shapes: [
+      { type: "sun", label: "Sun" },
+      { type: "shell", label: "Shell" },
+      { type: "starfish", label: "Starfish" },
+    ],
+  },
+  {
+    id: "occasions",
+    label: "Occasions",
+    shapes: [{ type: "moon", label: "Moon" }],
+  },
+];
+
+/** Category a shape belongs to (rectangle/custom return null — always shown). */
+export function shapeCategoryOf(type: ShapeType): ShapeCategory | null {
+  for (const cat of SHAPE_CATEGORIES) {
+    if (cat.shapes.some((s) => s.type === type)) return cat.id;
+  }
+  return null;
+}
 
 export interface ShapeParams {
   type: ShapeType;
@@ -21,13 +145,25 @@ export interface ShapeParams {
   cy: number;
   /** Shape span as a fraction of the image's smaller dimension (0.05..1.5). */
   size: number;
+  /**
+   * Custom crop width as a fraction of the image width (0..1).
+   * Only used when type === "custom".
+   */
+  w?: number;
+  /**
+   * Custom crop height as a fraction of the image height (0..1).
+   * Only used when type === "custom".
+   */
+  h?: number;
 }
 
 /**
  * Explicit polygon vertices (unit space, +Y up, centered) or null for shapes
- * with cheap direct tests (rectangle, circle, square).
+ * with cheap direct tests (rectangle, circle, square, custom).
  */
-export function shapePolygon(type: ShapeType): [number, number][] | null {
+export function shapePolygon(
+  type: Exclude<ShapeType, "custom">
+): [number, number][] | null {
   const pts: [number, number][] = [];
   switch (type) {
     case "triangle": {
@@ -56,6 +192,498 @@ export function shapePolygon(type: ShapeType): [number, number][] | null {
       }
       return pts;
     }
+    case "diamond": {
+      // faceted gem: wide top edge, pointed bottom
+      return [
+        [-0.55, 0.55],
+        [0.55, 0.55],
+        [1, 0.1],
+        [0, -1],
+        [-1, 0.1],
+      ] as [number, number][];
+    }
+    case "cross": {
+      // plus sign, chunky arms
+      const a = 0.28;
+      return [
+        [-a, 1],
+        [a, 1],
+        [a, a],
+        [1, a],
+        [1, -a],
+        [a, -a],
+        [a, -1],
+        [-a, -1],
+        [-a, -a],
+        [-1, -a],
+        [-1, a],
+        [-a, a],
+      ] as [number, number][];
+    }
+    case "tree": {
+      // layered christmas tree, point up, trunk at the bottom
+      return [
+        [0, 1],
+        [0.22, 0.62],
+        [0.1, 0.62],
+        [0.34, 0.28],
+        [0.2, 0.28],
+        [0.48, -0.12],
+        [0.32, -0.12],
+        [0.6, -0.5],
+        [0.18, -0.5],
+        [0.18, -0.78],
+        [-0.18, -0.78],
+        [-0.18, -0.5],
+        [-0.6, -0.5],
+        [-0.32, -0.12],
+        [-0.48, -0.12],
+        [-0.2, 0.28],
+        [-0.34, 0.28],
+        [-0.1, 0.62],
+        [-0.22, 0.62],
+      ] as [number, number][];
+    }
+    case "snowflake": {
+      // 6-armed snowflake: hexagon core with a spike on each vertex
+      const pts: [number, number][] = [];
+      for (let k = 0; k < 6; k++) {
+        const a = (k * Math.PI) / 3; // vertex angle
+        const aNext = ((k + 1) * Math.PI) / 3;
+        const aMid = (a + aNext) / 2;
+        // valley between arms, then out to the spike tip, then back in
+        pts.push(
+          [0.42 * Math.cos(aMid - 0.18), 0.42 * Math.sin(aMid - 0.18)],
+          [1 * Math.cos(a), 1 * Math.sin(a)],
+          [0.42 * Math.cos(aMid + 0.18), 0.42 * Math.sin(aMid + 0.18)]
+        );
+      }
+      return pts;
+    }
+    case "stocking": {
+      // christmas stocking: ONE continuous outer silhouette — a wide folded
+      // cuff, a gently tapering leg and a heel-to-toe foot pointing right.
+      // The cuff is part of the same loop (there is no separate inner cuff
+      // edge), so the outline never doubles back across the leg; only the
+      // cuff's two overhangs sit on the cuff bottom line. All corners are
+      // rounded and the toe / heel are true arcs.
+      const pts: [number, number][] = [];
+      const arc = (
+        cx: number,
+        cy: number,
+        r: number,
+        a0: number,
+        a1: number,
+        n: number
+      ) => {
+        for (let k = 0; k <= n; k++) {
+          const a = a0 + ((a1 - a0) * k) / n;
+          pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+        }
+      };
+      const bez = (
+        p0: [number, number],
+        p1: [number, number],
+        p2: [number, number],
+        p3: [number, number],
+        n: number
+      ) => {
+        for (let k = 0; k <= n; k++) {
+          const t = k / n;
+          const u = 1 - t;
+          pts.push([
+            u * u * u * p0[0] +
+              3 * u * u * t * p1[0] +
+              3 * u * t * t * p2[0] +
+              t * t * t * p3[0],
+            u * u * u * p0[1] +
+              3 * u * u * t * p1[1] +
+              3 * u * t * t * p2[1] +
+              t * t * t * p3[1],
+          ]);
+        }
+      };
+      // rounded corner: cut the corner at `p` with a quadratic bezier, so the
+      // outline enters from `prev` and leaves towards `next` without a kink
+      const corner = (
+        prev: [number, number],
+        p: [number, number],
+        next: [number, number],
+        d: number,
+        n = 5
+      ) => {
+        const ua = Math.hypot(prev[0] - p[0], prev[1] - p[1]) || 1;
+        const ub = Math.hypot(next[0] - p[0], next[1] - p[1]) || 1;
+        const da = Math.min(d, ua * 0.45);
+        const db = Math.min(d, ub * 0.45);
+        const s: [number, number] = [
+          p[0] + ((prev[0] - p[0]) / ua) * da,
+          p[1] + ((prev[1] - p[1]) / ua) * da,
+        ];
+        const e: [number, number] = [
+          p[0] + ((next[0] - p[0]) / ub) * db,
+          p[1] + ((next[1] - p[1]) / ub) * db,
+        ];
+        for (let k = 0; k <= n; k++) {
+          const t = k / n;
+          const u = 1 - t;
+          pts.push([
+            u * u * s[0] + 2 * u * t * p[0] + t * t * e[0],
+            u * u * s[1] + 2 * u * t * p[1] + t * t * e[1],
+          ]);
+        }
+      };
+      // cuff (wider than the leg, top edge tipped a touch) and the leg it
+      // sits on: the leg's top edge is hidden under the cuff, so it never
+      // appears in the outline
+      const cuffBL: [number, number] = [-0.68, 0.64];
+      const cuffBR: [number, number] = [0.52, 0.64];
+      const cuffTR: [number, number] = [0.52, 0.9];
+      const cuffTL: [number, number] = [-0.68, 0.95];
+      const legBackTop: [number, number] = [-0.46, 0.64];
+      const legFrontTop: [number, number] = [0.32, 0.64];
+      const ankle: [number, number] = [0.26, -0.08];
+      const toeCx = 0.58;
+      const toeCy = -0.6;
+      const toeR = 0.26;
+      const toeA = Math.PI / 2; // the instep joins the toe at its very top
+      const toe: [number, number] = [
+        toeCx + toeR * Math.cos(toeA),
+        toeCy + toeR * Math.sin(toeA),
+      ];
+      const soleEnd: [number, number] = [toeCx, toeCy - toeR];
+      const heelCx = -0.42;
+      const heelCy = -0.6;
+      const heelR = 0.26;
+      const heel: [number, number] = [heelCx - heelR, heelCy];
+      // start where the back of the leg meets the cuff, then walk the cuff
+      // (left overhang, left edge, top, right edge, right overhang)
+      corner(legBackTop, cuffBL, cuffTL, 0.1);
+      corner(cuffBL, cuffTL, cuffTR, 0.1);
+      corner(cuffTL, cuffTR, cuffBR, 0.1);
+      corner(cuffTR, cuffBR, legFrontTop, 0.1);
+      // --- leg front: gentle inward taper to the ankle ---
+      bez(legFrontTop, [0.33, 0.4], [0.28, 0.14], ankle, 8);
+      // --- ankle into instep: smooth S-curve out to the toe bulb ---
+      bez(ankle, [0.26, -0.22], [0.45, -0.34], toe, 8);
+      // --- toe: round the front and under to the sole ---
+      arc(toeCx, toeCy, toeR, toeA, -Math.PI / 2, 8);
+      // --- sole: soft wave back to the heel ---
+      bez(soleEnd, [0.26, -0.9], [-0.04, -0.9], [heelCx, heelCy - heelR], 8);
+      // --- heel: full round turn up the back of the leg ---
+      arc(heelCx, heelCy, heelR, -Math.PI / 2, -Math.PI, 8);
+      // --- back of leg: long smooth line back up to the cuff ---
+      bez(heel, [-0.63, -0.15], [-0.55, 0.3], legBackTop, 8);
+      return pts;
+    }
+    case "bell": {
+      // christmas bell: domed top with the knob spliced into the dome outline
+      // (the dome arc is interrupted where the knob sits, so the outline never
+      // doubles back), flared rim, clapper bump
+      const pts: [number, number][] = [];
+      const cy = 0.2;
+      const R = 0.55;
+      const knobHalf = 0.12;
+      const aFoot = Math.acos(knobHalf / R); // dome angle at the knob's foot
+      const footY = cy + R * Math.sin(aFoot);
+      const N = 12;
+      // dome: right rim up to the knob's right foot
+      for (let k = 0; k <= N; k++) {
+        const a = (aFoot * k) / N;
+        pts.push([R * Math.cos(a), cy + R * Math.sin(a)]);
+      }
+      // knob: up the right foot, across the flat top, down the left foot
+      pts.push([knobHalf, footY], [0.1, 0.92], [-0.1, 0.92], [-knobHalf, footY]);
+      // dome: knob's left foot over to the left rim
+      for (let k = 0; k <= N; k++) {
+        const a = Math.PI - aFoot + (aFoot * k) / N;
+        pts.push([R * Math.cos(a), cy + R * Math.sin(a)]);
+      }
+      // left rim, clapper bump, right rim up to the dome start
+      pts.push(
+        [-0.8, -0.55],
+        [-0.62, -0.55],
+        [-0.62, -0.68],
+        [-0.25, -0.82], // clapper bump
+        [0.25, -0.82],
+        [0.62, -0.68],
+        [0.62, -0.55],
+        [0.8, -0.55]
+      );
+      return pts;
+    }
+    case "gingerbread-man": {
+      // gingerbread man (template top-left): big round head, stubby arms
+      // angled slightly upward, two rounded legs with a V crotch notch.
+      return gingerbreadBody(false);
+    }
+    case "gingerbread-woman": {
+      // gingerbread woman (template top-right): same head and arms as the
+      // man, but a flared dress instead of legs, with two short rounded
+      // legs peeking out below the hem.
+      return gingerbreadBody(true);
+    }
+    case "pumpkin":
+      // halloween pumpkin: ribbed body with a curling stem
+      return pumpkinOutline();
+    case "ghost":
+      // halloween ghost: dome head, outstretched wavy arms, wavy tail
+      return ghostOutline();
+    case "bat": {
+      // halloween bat: pointed ears, scalloped wings, notched tail
+      const pts: [number, number][] = [];
+      // head with ears (left to right over the top)
+      pts.push(
+        [-0.28, 0.15],
+        [-0.3, 0.55],
+        [-0.14, 0.35],
+        [0, 0.42],
+        [0.14, 0.35],
+        [0.3, 0.55],
+        [0.28, 0.15]
+      );
+      // right wing: out to tip, scalloped back to the body
+      pts.push([0.6, 0.3], [1, 0.45], [0.85, 0.05], [0.95, -0.15], [0.6, -0.2], [0.55, -0.45], [0.3, -0.3]);
+      // tail notch
+      pts.push([0.12, -0.5], [0, -0.35], [-0.12, -0.5]);
+      // left wing mirrored
+      pts.push([-0.3, -0.3], [-0.55, -0.45], [-0.6, -0.2], [-0.95, -0.15], [-0.85, 0.05], [-1, 0.45], [-0.6, 0.3]);
+      return pts;
+    }
+    case "leaf": {
+      // maple-ish leaf: pointed lobes around a stem
+      return [
+        [0, 1],
+        [0.18, 0.62],
+        [0.55, 0.75],
+        [0.42, 0.4],
+        [0.85, 0.35],
+        [0.5, 0.1],
+        [0.75, -0.25],
+        [0.35, -0.3],
+        [0.28, -0.7],
+        [0.08, -0.45],
+        [0, -1], // stem tip
+        [-0.08, -0.45],
+        [-0.28, -0.7],
+        [-0.35, -0.3],
+        [-0.75, -0.25],
+        [-0.5, 0.1],
+        [-0.85, 0.35],
+        [-0.42, 0.4],
+        [-0.55, 0.75],
+        [-0.18, 0.62],
+      ] as [number, number][];
+    }
+    case "acorn": {
+      // acorn: oval nut below, wide flat-topped cap above with a stem nub.
+      // The nut runs from its right shoulder around the bottom to the left
+      // shoulder, then the cap runs back left -> right; the closing edges are
+      // the two short vertical sides (no chord across the body).
+      const pts: [number, number][] = [];
+      const N = 32;
+      for (let k = 0; k <= N / 2; k++) {
+        const t = -(k * Math.PI) / (N / 2); // 0 -> -pi: right -> bottom -> left
+        pts.push([Math.cos(t) * 0.62, Math.sin(t) * 0.75 - 0.15]);
+      }
+      // cap: left rim up over the flat top (stem nub) and down to the right rim
+      pts.push(
+        [-0.62, -0.08],
+        [-0.85, 0.25],
+        [-0.7, 0.55],
+        [-0.15, 0.62],
+        [-0.12, 0.85],
+        [0.08, 0.85],
+        [0.1, 0.62],
+        [0.7, 0.55],
+        [0.85, 0.25],
+        [0.62, -0.08]
+      );
+      return pts;
+    }
+    case "egg": {
+      // easter egg: narrower rounded top, wider rounded bottom
+      const pts: [number, number][] = [];
+      const N = 48;
+      for (let k = 0; k < N; k++) {
+        const t = (k * 2 * Math.PI) / N; // 0 = +x axis, pi/2 = top
+        const s = Math.sin(t); // +1 at top, -1 at bottom
+        const w = 0.72 - 0.18 * s; // slim top, full bottom
+        pts.push([w * Math.cos(t), 0.95 * s]);
+      }
+      return pts;
+    }
+    case "bunny": {
+      // easter bunny head: round face with two tall ears
+      const pts: [number, number][] = [];
+      const N = 40;
+      for (let k = 0; k < N; k++) {
+        const t = (k * 2 * Math.PI) / N; // 0 = +x axis
+        const dx = Math.cos(t);
+        const dy = Math.sin(t);
+        let r: number;
+        if (dy > 0.15 && Math.abs(dx) > 0.08 && Math.abs(dx) < 0.55) {
+          // ears: tall rounded lobes on the upper-left / upper-right
+          r = 1.35 - 0.5 * Math.abs(Math.abs(dx) - 0.3);
+        } else {
+          // face: slightly squashed circle
+          r = 0.72;
+        }
+        pts.push([dx * r, dy > 0 ? dy * r * 0.85 + 0.1 : dy * r + 0.1]);
+      }
+      return pts;
+    }
+    case "flower": {
+      // 6-petal rosette with a round center. cos^2 gives smooth valleys
+      // between the petals (the old |cos|^0.7 profile left cusps that the
+      // sampled outline turned into hairline slivers).
+      const pts: [number, number][] = [];
+      const N = 72;
+      for (let k = 0; k < N; k++) {
+        const t = (k * 2 * Math.PI) / N;
+        const c = Math.cos(3 * t);
+        const r = 0.55 + 0.45 * c * c;
+        pts.push([r * Math.cos(t), r * Math.sin(t)]);
+      }
+      return pts;
+    }
+    case "tulip": {
+      // tulip cup with 3 pointed petals, stem and two leaves
+      const pts: [number, number][] = [];
+      // cup: left rim -> petal tips -> right rim
+      pts.push(
+        [-0.45, 0.5],
+        [-0.45, 0.9],
+        [-0.22, 0.7],
+        [0, 1],
+        [0.22, 0.7],
+        [0.45, 0.9],
+        [0.45, 0.5],
+        [0.35, 0.1],
+        [0.15, -0.1],
+        [0.5, -0.3], // right leaf tip
+        [0.12, -0.35],
+        [0.08, -0.9], // stem right
+        [-0.08, -0.9], // stem left
+        [-0.12, -0.35],
+        [-0.5, -0.3], // left leaf tip
+        [-0.15, -0.1],
+        [-0.35, 0.1]
+      );
+      return pts;
+    }
+    case "butterfly": {
+      // symmetric butterfly: big upper wings, small lower wings, body notch
+      const pts: [number, number][] = [];
+      const N = 48;
+      for (let k = 0; k < N; k++) {
+        const t = (k * 2 * Math.PI) / N;
+        const dx = Math.cos(t);
+        const dy = Math.sin(t);
+        let r: number;
+        if (dy >= 0) r = 0.95 - 0.25 * Math.abs(dx); // upper wings
+        else r = 0.6 - 0.3 * Math.abs(dx); // lower wings
+        if (Math.abs(dx) < 0.12) r = 0.28; // body pinch
+        pts.push([dx * r, dy * r * 0.9]);
+      }
+      return pts;
+    }
+    case "shamrock": {
+      // 3 heart-ish lobes + stem: radial profile with 3 bumps. The clover ring
+      // is sampled with a gap at the bottom; the stem tab is spliced into that
+      // gap (its top corners are the ring points either side of the gap), so
+      // the outline is one loop that never doubles back across the body.
+      const N = 60;
+      const ring: [number, number][] = [];
+      let gapAt = -1; // ring index of the first point after the gap
+      for (let k = 0; k < N; k++) {
+        const t = (k * 2 * Math.PI) / N;
+        const dy = Math.sin(t);
+        if (dy < -0.35 && Math.abs(Math.cos(t)) < 0.18) {
+          if (gapAt < 0) gapAt = ring.length;
+          continue; // stem gap
+        }
+        const r = 0.45 + 0.35 * Math.pow(Math.abs(Math.cos(1.5 * t)), 0.8);
+        ring.push([r * Math.cos(t), r * Math.sin(t) + 0.15]);
+      }
+      if (gapAt < 0) gapAt = 0;
+      const pts: [number, number][] = ring.slice(0, gapAt);
+      // stem: down from the gap's left edge, across the bottom, back up to the
+      // gap's right edge
+      const left = ring[gapAt - 1] ?? ring[ring.length - 1];
+      const right = ring[gapAt] ?? ring[0];
+      pts.push([left[0], left[1]], [-0.1, -0.92], [0.1, -0.92], [right[0], right[1]]);
+      pts.push(...ring.slice(gapAt));
+      return pts;
+    }
+    case "sun": {
+      // sun: round core with 8 triangular rays
+      const pts: [number, number][] = [];
+      const rays = 8;
+      for (let k = 0; k < rays; k++) {
+        const a = (k * 2 * Math.PI) / rays;
+        const aW = Math.PI / rays / 2.2;
+        pts.push(
+          [0.5 * Math.cos(a - aW), 0.5 * Math.sin(a - aW)],
+          [1 * Math.cos(a), 1 * Math.sin(a)],
+          [0.5 * Math.cos(a + aW), 0.5 * Math.sin(a + aW)]
+        );
+      }
+      return pts;
+    }
+    case "shell": {
+      // scallop shell: fan with ridged top edge, hinge at the bottom
+      const pts: [number, number][] = [];
+      const N = 48;
+      for (let k = 0; k <= N; k++) {
+        const a = (k * Math.PI) / N; // 0 -> pi, right -> top -> left
+        const r = 0.85 + 0.12 * Math.cos(7 * a);
+        pts.push([r * Math.cos(a), r * Math.sin(a) * 0.9 - 0.05]);
+      }
+      pts.push([-0.25, -0.55], [0, -0.9], [0.25, -0.55]); // hinge
+      return pts;
+    }
+    case "starfish": {
+      // starfish: 5 fat rounded arms (chubby star)
+      const pts: [number, number][] = [];
+      for (let k = 0; k < 10; k++) {
+        const outer = k % 2 === 0;
+        const a = Math.PI / 2 + (k * Math.PI) / 5;
+        const r = outer ? 1 : 0.55;
+        pts.push([r * Math.cos(a), r * Math.sin(a)]);
+      }
+      return pts;
+    }
+    case "moon": {
+      // crescent moon: outer disc edge on the left, carved by an overlapping
+      // disc on the right (crescent opens to the right). Both arcs meet at the
+      // exact circle-circle intersection points (the horns), so no closing
+      // chord cuts across the crescent.
+      const pts: [number, number][] = [];
+      const r1 = 0.95; // outer disc, centered on the origin
+      const cx = 0.55; // carving disc center
+      const r2 = 0.8;
+      const a = (cx * cx + r1 * r1 - r2 * r2) / (2 * cx); // horn x on the outer circle
+      const h = Math.sqrt(Math.max(0, r1 * r1 - a * a));
+      const upA = Math.atan2(h, a); // upper horn angle (outer circle)
+      const loA = -upA;
+      const N = 40;
+      // outer arc: upper horn -> around the left -> lower horn
+      for (let k = 0; k <= N; k++) {
+        const ang = upA + ((Math.PI * 2 + loA - upA) * k) / N;
+        pts.push([r1 * Math.cos(ang), r1 * Math.sin(ang)]);
+      }
+      // inner edge: the carving circle's left arc, from the lower horn back up
+      // to the upper horn (this is exactly the part inside the outer disc)
+      const upC = Math.atan2(h, a - cx);
+      const loC = Math.atan2(-h, a - cx);
+      const M = 28;
+      for (let k = 1; k < M; k++) {
+        const ang = loC + ((upC - loC - Math.PI * 2) * k) / M;
+        pts.push([cx + r2 * Math.cos(ang), r2 * Math.sin(ang)]);
+      }
+      return pts;
+    }
     case "heart": {
       // classic parametric heart, scaled to roughly fit [-1, 1]
       let s = 0;
@@ -75,6 +703,418 @@ export function shapePolygon(type: ShapeType): [number, number][] | null {
     default:
       return null;
   }
+}
+
+/**
+ * Shared gingerbread outline (template style): big round head, stubby arms
+ * angled slightly upward with round hands. The man's lower half is two
+ * rounded legs with a V crotch notch; the woman's is a flared dress with
+ * two short rounded legs below the hem. Built from smooth arc/bezier
+ * sections so every corner is round.
+ */
+function gingerbreadBody(dress: boolean): [number, number][] {
+  const pts: [number, number][] = [];
+  const arc = (
+    cx: number,
+    cy: number,
+    r: number,
+    a0: number,
+    a1: number,
+    n: number
+  ) => {
+    for (let k = 0; k <= n; k++) {
+      const a = a0 + ((a1 - a0) * k) / n;
+      pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+  };
+  const bez = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    n: number
+  ) => {
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      const u = 1 - t;
+      pts.push([
+        u * u * u * p0[0] +
+          3 * u * u * t * p1[0] +
+          3 * u * t * t * p2[0] +
+          t * t * t * p3[0],
+        u * u * u * p0[1] +
+          3 * u * u * t * p1[1] +
+          3 * u * t * t * p2[1] +
+          t * t * t * p3[1],
+      ]);
+    }
+  };
+  // head: circle minus the neck wedge. The outline STARTS at the LEFT chin,
+  // sweeps over the top (clockwise, matching the body below) and comes back
+  // down to the RIGHT chin; the body then continues down the right neck with
+  // no retracing. The closing edge from the left shoulder back to the left
+  // chin is the single neck line.
+  const neckHalf = 0.3;
+  const headCy = 0.62;
+  const headR = 0.34;
+  const neckY = headCy - Math.sqrt(headR * headR - neckHalf * neckHalf);
+  const headN = 24;
+  const aLeft = Math.atan2(neckY - headCy, -neckHalf);
+  const aRight = Math.atan2(neckY - headCy, neckHalf) - Math.PI * 2;
+  for (let k = 0; k <= headN; k++) {
+    const a = aLeft + ((aRight - aLeft) * k) / headN;
+    pts.push([headR * Math.cos(a), headCy + headR * Math.sin(a)]);
+  }
+  // right neck into shoulder/armpit
+  bez([0.3, neckY], [0.28, 0.42], [0.32, 0.4], [0.38, 0.4], 3);
+  // right arm: out to the rounded hand, angled slightly upward
+  bez([0.38, 0.42], [0.55, 0.46], [0.72, 0.5], [0.84, 0.52], 6);
+  arc(0.84, 0.4, 0.12, Math.PI / 2, -Math.PI / 2, 8);
+  // right arm underside back to the armpit
+  bez([0.84, 0.28], [0.68, 0.24], [0.54, 0.2], [0.44, 0.14], 6);
+  if (!dress) {
+    // right torso down to the hip
+    bez([0.44, 0.14], [0.38, 0.02], [0.36, -0.08], [0.38, -0.18], 4);
+    // right leg outer edge down to the rounded foot
+    bez([0.38, -0.18], [0.44, -0.4], [0.5, -0.6], [0.5, -0.78], 6);
+    arc(0.32, -0.78, 0.18, 0, -Math.PI, 8);
+    // right leg inner edge up to the crotch notch
+    bez([0.14, -0.78], [0.14, -0.6], [0.1, -0.5], [0.05, -0.42], 5);
+    arc(0, -0.36, 0.055, 0, Math.PI, 4);
+    // left leg inner edge down to the foot
+    bez([-0.05, -0.42], [-0.1, -0.5], [-0.14, -0.6], [-0.14, -0.78], 5);
+    arc(-0.32, -0.78, 0.18, 0, -Math.PI, 8);
+    // left leg outer edge up to the hip
+    bez([-0.5, -0.78], [-0.5, -0.6], [-0.44, -0.4], [-0.38, -0.18], 6);
+    // left torso up to the armpit
+    bez([-0.38, -0.18], [-0.36, -0.08], [-0.38, 0.02], [-0.44, 0.14], 4);
+  } else {
+    // right bodice flaring out to the dress hem
+    bez([0.44, 0.14], [0.42, 0.0], [0.48, -0.15], [0.58, -0.3], 6);
+    // right hem corner (rounded)
+    arc(0.5, -0.34, 0.1, 0.3, -Math.PI / 2 - 0.2, 5);
+    // right leg outer edge down to the foot
+    bez([0.48, -0.46], [0.48, -0.58], [0.47, -0.68], [0.45, -0.78], 4);
+    arc(0.29, -0.78, 0.16, 0, -Math.PI, 8);
+    // right leg inner edge up to the dress underside
+    bez([0.13, -0.78], [0.13, -0.66], [0.12, -0.58], [0.1, -0.52], 4);
+    // dress underside scallop between the legs
+    bez([0.1, -0.52], [0.05, -0.48], [-0.05, -0.48], [-0.1, -0.52], 4);
+    // left leg inner edge down to the foot
+    bez([-0.1, -0.52], [-0.12, -0.58], [-0.13, -0.66], [-0.13, -0.78], 4);
+    arc(-0.29, -0.78, 0.16, 0, -Math.PI, 8);
+    // left leg outer edge up to the hem
+    bez([-0.45, -0.78], [-0.47, -0.68], [-0.48, -0.58], [-0.48, -0.46], 4);
+    // left hem corner (rounded): from the leg outer edge around to the
+    // dress side edge, sweeping through the left (outer) side
+    arc(-0.5, -0.34, 0.1, -Math.PI / 2 + 0.2, -Math.PI - 0.3, 5);
+    // left side of dress back up to the armpit
+    bez([-0.58, -0.3], [-0.48, -0.15], [-0.42, 0.0], [-0.44, 0.14], 6);
+  }
+  // left arm underside out to the hand
+  bez([-0.44, 0.14], [-0.54, 0.2], [-0.68, 0.24], [-0.84, 0.28], 6);
+  arc(-0.84, 0.4, 0.12, -Math.PI / 2, -Math.PI * 1.5, 8);
+  // left arm top back to the shoulder; the closing edge from here to the
+  // head's first point (the left chin) is the left neck line
+  bez([-0.84, 0.52], [-0.72, 0.5], [-0.55, 0.46], [-0.38, 0.4], 6);
+  return pts;
+}
+
+/**
+ * Pumpkin outline (template style): a wide ribbed body with a curling stem.
+ * The body is a chain of rib lobes — the arcs through consecutive crease
+ * points, each standing a chosen `rise` above its chord — joined by rounded
+ * notches: at every interior crease the two lobes that meet there are trimmed
+ * back and bridged by a short bezier that leaves and arrives along the lobe
+ * tangents, so creases read as round-bottomed slits rather than spikes. The
+ * stem is spliced into the gap between the two crown ribs: up its left edge,
+ * over the curled crest, through the notch to the hooked tip, then back down
+ * the right edge into the body. `ribs`/`bez` skip their start point (it is
+ * already the previous point).
+ */
+function pumpkinOutline(): [number, number][] {
+  const pts: [number, number][] = [];
+  const bez = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    n: number
+  ) => {
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const u = 1 - t;
+      pts.push([
+        u * u * u * p0[0] +
+          3 * u * u * t * p1[0] +
+          3 * u * t * t * p2[0] +
+          t * t * t * p3[0],
+        u * u * u * p0[1] +
+          3 * u * u * t * p1[1] +
+          3 * u * t * t * p2[1] +
+          t * t * t * p3[1],
+      ]);
+    }
+  };
+  // Body centre: decides which side of a chord is "out".
+  const bcx = 0;
+  const bcy = -0.18;
+  const onCircle = (
+    c: { cx: number; cy: number; r: number },
+    a: number
+  ): [number, number] => [c.cx + c.r * Math.cos(a), c.cy + c.r * Math.sin(a)];
+  /** Circle through p0..p1 whose crest stands `rise` above the chord, on the
+   *  far side of that chord from the body centre. `da` is the signed angular
+   *  sweep from p0 to p1 taken the short way, so the crest is always on it. */
+  const lobeCircle = (
+    p0: [number, number],
+    p1: [number, number],
+    rise: number
+  ) => {
+    const dx = p1[0] - p0[0];
+    const dy = p1[1] - p0[1];
+    const len = Math.hypot(dx, dy) || 1;
+    const mx = (p0[0] + p1[0]) / 2;
+    const my = (p0[1] + p1[1]) / 2;
+    let nx = -dy / len;
+    let ny = dx / len;
+    if (nx * (mx - bcx) + ny * (my - bcy) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const r = (len * len) / (8 * rise) + rise / 2;
+    const h = r - rise; // circle centre stands h back from the chord
+    const cx = mx - h * nx;
+    const cy = my - h * ny;
+    const a0 = Math.atan2(p0[1] - cy, p0[0] - cx);
+    let da = Math.atan2(p1[1] - cy, p1[0] - cx) - a0;
+    if (da > Math.PI) da -= 2 * Math.PI;
+    if (da < -Math.PI) da += 2 * Math.PI;
+    return { cx, cy, r, a0, da };
+  };
+  /** Travel direction along a lobe at angle a (the body is walked clockwise). */
+  const tangent = (da: number, a: number): [number, number] => {
+    const s = da < 0 ? -1 : 1;
+    return [-s * Math.sin(a), s * Math.cos(a)];
+  };
+  /**
+   * Ribbed chain: one lobe per crease pair, joined at interior creases by
+   * rounded notches. `notch[k]` is how far the lobes either side of crease
+   * k+1 are trimmed back before a bezier bridges them, so that crease can be
+   * as deep as its point asks without becoming a spike. The chain's first
+   * crease must already be on the list; its last crease stays a corner.
+   */
+  const ribs = (
+    creases: [number, number][],
+    rises: number[],
+    notch: number[]
+  ) => {
+    const lobes = rises.map((rise, i) =>
+      lobeCircle(creases[i], creases[i + 1], rise)
+    );
+    let prevP: [number, number] = [0, 0];
+    let prevT: [number, number] = [1, 0];
+    lobes.forEach((c, i) => {
+      const sign = c.da < 0 ? -1 : 1;
+      const ds = i > 0 ? notch[i - 1] / c.r : 0; // trim back from crease here
+      const de = i < lobes.length - 1 ? notch[i] / c.r : 0; // and from the next
+      const a0 = c.a0 + sign * ds;
+      const a1 = c.a0 + c.da - sign * de;
+      const start = onCircle(c, a0);
+      if (i === 0) {
+        pts.push(start);
+      } else {
+        const h = notch[i - 1] * 0.55;
+        const t = tangent(c.da, a0);
+        bez(
+          prevP,
+          [prevP[0] + prevT[0] * h, prevP[1] + prevT[1] * h],
+          [start[0] - t[0] * h, start[1] - t[1] * h],
+          start,
+          4
+        );
+      }
+      // a sample per 0.045 of arc keeps the big lobes as smooth as the small
+      const n = Math.max(3, Math.ceil((Math.abs(c.da) * c.r) / 0.045));
+      for (let k = 1; k <= n; k++) {
+        pts.push(onCircle(c, a0 + ((a1 - a0) * k) / n));
+      }
+      prevP = onCircle(c, a1);
+      prevT = tangent(c.da, a1);
+    });
+  };
+  const sbl: [number, number] = [-0.122, 0.545]; // stem base, left of the gap
+  const sbr: [number, number] = [0.122, 0.545]; // stem base, right of the gap
+  // crease points, walked clockwise from the stem's right base: crown rib,
+  // shoulder, cheek, five bottom scallops, then the mirror back up to the
+  // stem's left base
+  const creases: [number, number][] = [
+    sbr,
+    [0.4, 0.462], // crown rib -> shoulder
+    [0.8, 0.3], // shoulder -> cheek
+    [0.885, -0.43], // cheek -> outer scallop
+    [0.6, -0.745], // outer -> mid scallop
+    [0.245, -0.8], // mid -> centre scallop
+    [-0.245, -0.8], // centre -> mid scallop
+    [-0.6, -0.745],
+    [-0.885, -0.43],
+    [-0.8, 0.3],
+    [-0.4, 0.462],
+    sbl,
+  ];
+  // how far each rib's crest stands above its chord: crown, shoulder, cheek,
+  // outer/mid/centre scallops, then the mirror of all that
+  const rises = [
+    0.05, 0.165, 0.166, 0.082, 0.1, 0.125, 0.1, 0.082, 0.166, 0.165, 0.05,
+  ];
+  // crease rounding: a trim of t pulls the notch bottom ~t/2 out of the
+  // crease, so these are kept short where a crease wants to stay deep
+  // (bottom scallop slits) and longer for the soft crown/shoulder waves
+  const notch = [0.04, 0.05, 0.032, 0.026, 0.022, 0.022, 0.026, 0.032, 0.05, 0.04];
+  // stem: left edge up to the crest, over it, into the notch, out to the
+  // hooked tip, then down the right edge to the body's top edge
+  pts.push(sbl);
+  bez(sbl, [-0.152, 0.63], [-0.168, 0.78], [-0.124, 0.872], 8);
+  bez([-0.124, 0.872], [-0.104, 0.912], [-0.056, 0.912], [-0.018, 0.894], 6);
+  bez([-0.018, 0.894], [0.004, 0.868], [0.028, 0.862], [0.05, 0.876], 5);
+  bez([0.05, 0.876], [0.062, 0.882], [0.072, 0.888], [0.078, 0.894], 3);
+  bez([0.078, 0.894], [0.088, 0.8], [0.102, 0.66], sbr, 8);
+  ribs(creases, rises, notch);
+  // the closing edge retraces the last sample's short chord, so drop the
+  // duplicated closing point rather than leave a zero-length edge
+  const last = pts[pts.length - 1];
+  if (Math.hypot(last[0] - pts[0][0], last[1] - pts[0][1]) < 1e-9) pts.pop();
+  return pts;
+}
+
+/**
+ * Ghost outline (template style): round dome head, stubby arms out to either
+ * side with wavy undersides, a wavy tail sweeping to the lower right, and a
+ * notch where that tail passes below the right arm. Built from smooth
+ * arc/bezier sections so every corner is round. `arc` pushes both endpoints;
+ * `bez` and `wave` skip their start point (it is already the previous point).
+ */
+function ghostOutline(): [number, number][] {
+  const pts: [number, number][] = [];
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const onCircle = (cx: number, cy: number, r: number, a: number): [number, number] => [
+    cx + r * Math.cos(a),
+    cy + r * Math.sin(a),
+  ];
+  const arc = (
+    cx: number,
+    cy: number,
+    r: number,
+    a0: number,
+    a1: number,
+    n: number
+  ) => {
+    for (let k = 0; k <= n; k++) {
+      const a = a0 + ((a1 - a0) * k) / n;
+      pts.push(onCircle(cx, cy, r, a));
+    }
+  };
+  const bez = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    n: number
+  ) => {
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const u = 1 - t;
+      pts.push([
+        u * u * u * p0[0] +
+          3 * u * u * t * p1[0] +
+          3 * u * t * t * p2[0] +
+          t * t * t * p3[0],
+        u * u * u * p0[1] +
+          3 * u * u * t * p1[1] +
+          3 * u * t * t * p2[1] +
+          t * t * t * p3[1],
+      ]);
+    }
+  };
+  // Wavy edge from p0 to p1: `bumps` ripples of amplitude `amp`, the first
+  // one to the left of travel when `side` is +1. The sine is windowed by
+  // sin(pi t) so the edge leaves and rejoins its baseline tangentially — no
+  // kink where it meets the neighbouring segment.
+  const wave = (
+    p0: [number, number],
+    p1: [number, number],
+    amp: number,
+    bumps: number,
+    side: number,
+    n: number
+  ) => {
+    const dx = p1[0] - p0[0];
+    const dy = p1[1] - p0[1];
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const s = side * amp * Math.sin(2 * Math.PI * bumps * t) * Math.sin(Math.PI * t);
+      pts.push([p0[0] + dx * t + nx * s, p0[1] + dy * t + ny * s]);
+    }
+  };
+
+  // head: dome from the top down the left side to the left shoulder
+  const headC: [number, number] = [0, 0.42];
+  const headR = 0.5;
+  const shL = onCircle(headC[0], headC[1], headR, rad(186));
+  const shR = onCircle(headC[0], headC[1], headR, rad(-6));
+  arc(headC[0], headC[1], headR, rad(90), rad(186), 14);
+
+  // left arm: shoulder crease out over the top to the rounded tip
+  const armCL: [number, number] = [-0.87, 0.13];
+  const armR = 0.13;
+  const capL0 = rad(113);
+  const capL1 = rad(256);
+  const capLStart = onCircle(armCL[0], armCL[1], armR, capL0);
+  const capLEnd = onCircle(armCL[0], armCL[1], armR, capL1);
+  // control points lay the tangents along the dome above and the tip cap
+  // below, so the crease bends but never kinks
+  bez(shL, [-0.478, 0.169], [-0.737, 0.328], capLStart, 10);
+  // left arm tip: round cap (points left, a touch down)
+  arc(armCL[0], armCL[1], armR, capL0, capL1, 8);
+  // left arm underside: wavy fingers back in toward the body
+  wave(capLEnd, [-0.34, -0.1], 0.055, 1.5, -1, 28);
+
+  // body: armpit tucked under the arm, left flank, big round bottom
+  bez([-0.34, -0.1], [-0.192, -0.127], [-0.419, -0.379], [-0.47, -0.52], 10);
+  bez([-0.47, -0.52], [-0.44, -0.78], [-0.15, -0.88], [0.1, -0.8], 12);
+
+  // tail: wavy flap sweeping right, ending in a rounded tip
+  const tailC: [number, number] = [0.7, -0.44];
+  const tailR = 0.115;
+  const tailA0 = rad(-62);
+  const tailA1 = rad(78);
+  const tailStart = onCircle(tailC[0], tailC[1], tailR, tailA0);
+  const tailEnd = onCircle(tailC[0], tailC[1], tailR, tailA1);
+  wave([0.1, -0.8], tailStart, 0.07, 1.5, 1, 28);
+  arc(tailC[0], tailC[1], tailR, tailA0, tailA1, 8);
+  // tail upper edge: wave back left into the notch below the right arm
+  wave(tailEnd, [0.32, -0.26], 0.045, 1, -1, 18);
+
+  // right arm underside: wavy fingers out to the tip (the cap's start
+  // tangent is 24.4deg, matching the underside wave's baseline, so the two
+  // join smoothly)
+  const armCR: [number, number] = [0.87, 0.13];
+  const capR0 = rad(-65.6);
+  const capR1 = rad(67);
+  const capRStart = onCircle(armCR[0], armCR[1], armR, capR0);
+  const capREnd = onCircle(armCR[0], armCR[1], armR, capR1);
+  wave([0.32, -0.26], capRStart, 0.055, 1.5, 1, 28);
+  // right arm tip: round cap (points right, a touch up)
+  arc(armCR[0], armCR[1], armR, capR0, capR1, 8);
+  // right arm: top edge back up into the dome
+  bez(capREnd, [0.737, 0.328], [0.478, 0.169], shR, 10);
+  // dome: right shoulder over the top, closing the loop (stopping a hair
+  // short of the first point so the outline has no doubled-up vertex)
+  arc(headC[0], headC[1], headR, rad(-6), rad(89.6), 14);
+  return pts;
 }
 
 /** Even-odd point-in-polygon test. */
@@ -138,8 +1178,10 @@ export interface ShapeSilhouette {
   fillFine?(gw: number, gh: number, sub: number): Uint8Array;
 }
 
-/** Unit-space inside test shared by the pixel classifier and the silhouette. */
-function insideUnit(type: ShapeType, ux: number, uy: number): boolean {
+/** Unit-space inside test shared by the pixel classifier and the silhouette.
+ * Note: "custom" (pixel-space crop rect) is handled separately and never
+ * reaches this function. */
+function insideUnit(type: Exclude<ShapeType, "custom">, ux: number, uy: number): boolean {
   switch (type) {
     case "circle":
       return ux * ux + uy * uy <= 1;
@@ -181,9 +1223,11 @@ function projectToPolygon(
   return [bx, by];
 }
 
-/** Nearest point on the unit-space boundary of a shape. */
+/** Nearest point on the unit-space boundary of a shape.
+ * Note: "custom" (pixel-space crop rect) is handled separately and never
+ * reaches this function. */
 function projectUnit(
-  type: ShapeType,
+  type: Exclude<ShapeType, "custom">,
   ux: number,
   uy: number
 ): [number, number] {
@@ -210,9 +1254,33 @@ function projectUnit(
 }
 
 /**
+ * Pixel-space bounds of the "custom" crop rectangle: an axis-aligned rect
+ * centered at (cx, cy) with width w * gw and height h * gh, clamped to the
+ * image frame with a minimum span of 1px. Returned as [x0, y0, x1, y1] in
+ * fractional image-pixel coordinates (origin = top-left).
+ */
+export function customRectBounds(
+  shape: ShapeParams,
+  gw: number,
+  gh: number
+): { x0: number; y0: number; x1: number; y1: number } {
+  const wFrac = Math.max(0.01, Math.min(1, shape.w ?? shape.size ?? 1));
+  const hFrac = Math.max(0.01, Math.min(1, shape.h ?? shape.size ?? 1));
+  const wPx = Math.max(1, wFrac * gw);
+  const hPx = Math.max(1, hFrac * gh);
+  let x0 = shape.cx * gw - wPx / 2;
+  let y0 = shape.cy * gh - hPx / 2;
+  // Clamp the rect into the frame so drags near the edge keep full size.
+  x0 = Math.max(0, Math.min(gw - wPx, x0));
+  y0 = Math.max(0, Math.min(gh - hPx, y0));
+  return { x0, y0, x1: x0 + wPx, y1: y0 + hPx };
+}
+
+/**
  * Build the analytic silhouette of a shape over the pixel grid. For the
  * full-image rectangle the boundary is the image frame (pixel-aligned, so
- * projection is the identity there); every other shape tests and projects
+ * projection is the identity there); the "custom" crop rect is an
+ * axis-aligned pixel-space rect; every other shape tests and projects
  * exactly.
  */
 export function makeShapeSilhouette(
@@ -235,21 +1303,41 @@ export function makeShapeSilhouette(
       },
     };
   }
+  if (shape.type === "custom") {
+    const { x0, y0, x1, y1 } = customRectBounds(shape, gw, gh);
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.max(lo, Math.min(hi, v));
+    return {
+      inside: (px, py) => px >= x0 && px <= x1 && py >= y0 && py <= y1,
+      // Nearest point on the crop-rect boundary (falls back to clamping
+      // when the query point is strictly inside).
+      project: (px, py) => {
+        const cx = clamp(px, x0, x1);
+        const cy = clamp(py, y0, y1);
+        if (cx !== px || cy !== py) return [cx, cy];
+        const dx = Math.min(px - x0, x1 - px);
+        const dy = Math.min(py - y0, y1 - py);
+        if (dx <= dy) return [px - x0 <= x1 - px ? x0 : x1, cy];
+        return [cx, py - y0 <= y1 - py ? y0 : y1];
+      },
+    };
+  }
   const minDim = Math.min(gw, gh);
   const radiusPx = Math.max(1e-9, (shape.size * minDim) / 2);
   const cpx = shape.cx * gw;
   const cpy = shape.cy * gh;
-  const poly = shapePolygon(shape.type); // non-null for polygonal shapes
+  const poly = shapePolygon(shape.type as Exclude<ShapeType, "custom">); // non-null for polygonal shapes
+  const unitType = shape.type as Exclude<ShapeType, "custom">;
   const base = {
     inside: (px: number, py: number) =>
       insideUnit(
-        shape.type,
+        unitType,
         (px - cpx) / radiusPx,
         (cpy - py) / radiusPx
       ),
     project: (px: number, py: number): [number, number] => {
       const [ux, uy] = projectUnit(
-        shape.type,
+        unitType,
         (px - cpx) / radiusPx,
         (cpy - py) / radiusPx
       );
@@ -257,6 +1345,21 @@ export function makeShapeSilhouette(
     },
   };
   if (!poly) return base;
+  // Polygonal shapes: rebind to the polygon built above. insideUnit/
+  // projectUnit would call shapePolygon() again on every invocation, and
+  // this path runs per pixel (the classifier's coverage fallback) and per
+  // boundary vertex (mesh clipping) — rebuilding the outline each time made
+  // dense shapes (ghost, gingerbread) markedly slower to process.
+  base.inside = (px: number, py: number) =>
+    pointInPolygon((px - cpx) / radiusPx, (cpy - py) / radiusPx, poly);
+  base.project = (px: number, py: number): [number, number] => {
+    const [ux, uy] = projectToPolygon(
+      (px - cpx) / radiusPx,
+      (cpy - py) / radiusPx,
+      poly
+    );
+    return [ux * radiusPx + cpx, cpy - uy * radiusPx];
+  };
   // Scanline rasterizer for polygon shapes: for each fine row, intersect the
   // row with every polygon edge (even-odd rule) and fill the spans between
   // crossings. Cell centers sit at (fx + 0.5) / sub in pixel coordinates.
@@ -320,10 +1423,17 @@ export function classifyPixels(
   const cpy = shape.cy * gh;
   const scaleX = 1 / radiusPx;
   const scaleY = 1 / radiusPx;
-  const needPoly = !["rectangle", "circle", "square"].includes(shape.type);
-  const poly = needPoly ? shapePolygon(shape.type) : null;
+  const needPoly = !["rectangle", "circle", "square", "custom"].includes(
+    shape.type
+  );
+  const poly = needPoly
+    ? shapePolygon(shape.type as Exclude<ShapeType, "custom">)
+    : null;
   const silhouette =
     shape.type !== "rectangle" ? makeShapeSilhouette(shape, gw, gh) : null;
+  // Pixel-space crop rect for "custom" (avoids degenerate radiusPx math).
+  const customBounds =
+    shape.type === "custom" ? customRectBounds(shape, gw, gh) : null;
 
   for (let y = 0; y < gh; y++) {
     for (let x = 0; x < gw; x++) {
@@ -347,6 +1457,10 @@ export function classifyPixels(
         inside = ux * ux + uy * uy <= 1;
       } else if (shape.type === "square") {
         inside = Math.abs(ux) <= 1 && Math.abs(uy) <= 1;
+      } else if (shape.type === "custom") {
+        const b = customBounds!;
+        // Pixel-overlap test: pixel [x, x+1] x [y, y+1] vs crop rect.
+        inside = x < b.x1 && x + 1 > b.x0 && y < b.y1 && y + 1 > b.y0;
       } else {
         inside = pointInPolygon(ux, uy, poly!);
       }
@@ -369,9 +1483,12 @@ export function classifyPixels(
           d = Math.abs(1 - Math.sqrt(ux * ux + uy * uy)) * radiusPx;
         } else if (shape.type === "square") {
           d = Math.min(1 - Math.abs(ux), 1 - Math.abs(uy)) * radiusPx;
-        } else if (shape.type === "rectangle") {
-          // border = frame around the image edges
-          d = Math.min(x, y, gw - 1 - x, gh - 1 - y);
+        } else if (shape.type === "rectangle" || shape.type === "custom") {
+          // border = frame around the shape edges (image frame / crop rect)
+          const b = customBounds;
+          d = b
+            ? Math.min(x - b.x0, y - b.y0, b.x1 - 1 - x, b.y1 - 1 - y)
+            : Math.min(x, y, gw - 1 - x, gh - 1 - y);
         } else {
           d = distanceToPolygon(ux, uy, poly!) * radiusPx;
         }
@@ -423,6 +1540,9 @@ export function shapeOutlinePoints(
   type: ShapeType,
   samples = 128
 ): [number, number][] {
+  // "custom" is a pixel-space crop rect, not a unit-space outline; it is
+  // drawn directly as a rect in Preview2D and never needs outline points.
+  if (type === "custom") return [];
   const poly = shapePolygon(type);
   if (poly) return poly;
   if (type === "circle") {

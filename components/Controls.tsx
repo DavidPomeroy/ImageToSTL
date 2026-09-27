@@ -1,16 +1,18 @@
 "use client";
 
 import type { PrintMode } from "@/lib/pipeline";
-import type { ShapeType } from "@/lib/shapes";
+import {
+  SHAPE_CATEGORIES,
+  shapeCategoryOf,
+  type ShapeCategory,
+  type ShapeType,
+} from "@/lib/shapes";
+import { formatSliderValue, resolveSliderCommit } from "@/lib/slider";
+import { useRef, useState } from "react";
 
-const SHAPE_BUTTONS: [ShapeType, string][] = [
+const ALWAYS_SHAPES: [ShapeType, string][] = [
   ["rectangle", "Full"],
-  ["square", "Square"],
-  ["triangle", "Triangle"],
-  ["hexagon", "Hexagon"],
-  ["circle", "Circle"],
-  ["heart", "Heart"],
-  ["star", "Star"],
+  ["custom", "Custom"],
 ];
 
 interface SliderProps {
@@ -24,22 +26,79 @@ interface SliderProps {
 }
 
 function Slider({ label, value, min, max, step, unit, onChange }: SliderProps) {
+  // The readout doubles as a text field. While typing, a local draft keeps
+  // partial input ("0." or a lone "-") alive; blur / Enter commits it — the
+  // entry is clamped to the range and snapped to the slider's step — while Esc
+  // (or an entry with no number in it) reverts to the current value.
+  const [draft, setDraft] = useState<string | null>(null);
+  // First click into the field selects the whole value so typing replaces it;
+  // a later click places the caret for fine editing.
+  const freshClick = useRef(true);
+  const cancelled = useRef(false);
+  const text = draft ?? formatSliderValue(value, step);
+
+  const commit = (raw: string) => {
+    const wasCancelled = cancelled.current;
+    cancelled.current = false;
+    setDraft(null);
+    const next = resolveSliderCommit(raw, value, min, max, step, wasCancelled);
+    if (next !== null) onChange(next);
+  };
+
   return (
     <label className="block">
-      <div className="mb-1 flex items-baseline justify-between">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
         <span className="text-sm text-zinc-300">{label}</span>
-        <span className="text-sm tabular-nums text-zinc-400">
-          {value}
-          {unit}
+        <span className="flex items-baseline">
+          <input
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={`${label} value`}
+            title="Type a value, or drag the slider"
+            value={text}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onMouseUp={(e) => {
+              if (freshClick.current) {
+                e.currentTarget.select();
+                freshClick.current = false;
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.currentTarget.blur(); // blur commits
+              } else if (e.key === "Escape") {
+                cancelled.current = true;
+                setDraft(null);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e) => {
+              freshClick.current = true;
+              commit(e.currentTarget.value);
+            }}
+            className="w-16 rounded border border-transparent bg-transparent px-1 py-0.5 text-right text-sm tabular-nums text-zinc-400 transition-colors hover:border-zinc-700 focus:border-emerald-500/50 focus:bg-zinc-950 focus:text-zinc-200 focus:outline-none"
+          />
+          {unit !== "" && (
+            <span className="whitespace-pre text-sm tabular-nums text-zinc-400">
+              {unit}
+            </span>
+          )}
         </span>
       </div>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => {
+          setDraft(null);
+          onChange(Number(e.target.value));
+        }}
         className="w-full accent-emerald-500"
       />
     </label>
@@ -64,6 +123,61 @@ const DESCRIPTIONS: Record<PrintMode, string> = {
     "CMYK lithophane: thin Cyan / Magenta / Yellow layers mix subtractively for color, and a white relief on top controls brightness. Backlight it to see a full-color image. Needs 4 filaments (AMS/MMU).",
 };
 
+function ShapePicker(props: {
+  shapeType: ShapeType;
+  onShapeType: (t: ShapeType) => void;
+}) {
+  // Which category tab the seasonal shapes come from. If the current shape
+  // is seasonal, open on its category; otherwise default to Standard.
+  const [category, setCategory] = useState<ShapeCategory>(
+    () => shapeCategoryOf(props.shapeType) ?? "standard"
+  );
+  const active = SHAPE_CATEGORIES.find((c) => c.id === category)!;
+  const btn = (t: ShapeType, label: string) => (
+    <button
+      key={t}
+      type="button"
+      onClick={() => props.onShapeType(t)}
+      className={`rounded-md border px-1 py-2 text-center text-xs font-medium transition-colors ${
+        props.shapeType === t
+          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+          : "border-transparent text-zinc-400 hover:text-zinc-200"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+        {ALWAYS_SHAPES.map(([t, label]) => btn(t, label))}
+      </div>
+      <select
+        aria-label="Shape collection"
+        value={category}
+        onChange={(e) => {
+          const next = e.target.value as ShapeCategory;
+          setCategory(next);
+          // Auto-select the first shape in the newly chosen collection so
+          // the preview always reflects the dropdown.
+          const first = SHAPE_CATEGORIES.find((c) => c.id === next)!.shapes[0];
+          props.onShapeType(first.type);
+        }}
+        className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-2 text-xs font-medium text-zinc-300 focus:border-emerald-500/50 focus:outline-none"
+      >
+        {SHAPE_CATEGORIES.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+      <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+        {active.shapes.map((s) => btn(s.type, s.label))}
+      </div>
+    </div>
+  );
+}
+
 export default function Controls(props: {
   mode: PrintMode;
   colorCount: number;
@@ -78,6 +192,8 @@ export default function Controls(props: {
   smooth: boolean;
   shapeType: ShapeType;
   shapeSize: number;
+  shapeCropW: number;
+  shapeCropH: number;
   borderMm: number;
   curveDeg: number;
   onMode: (m: PrintMode) => void;
@@ -93,6 +209,8 @@ export default function Controls(props: {
   onSmooth: (v: boolean) => void;
   onShapeType: (t: ShapeType) => void;
   onShapeSize: (v: number) => void;
+  onShapeCropW: (v: number) => void;
+  onShapeCropH: (v: number) => void;
   onBorderMm: (v: number) => void;
   onCurveDeg: (v: number) => void;
 }) {
@@ -177,23 +295,40 @@ export default function Controls(props: {
       />
       <div>
         <div className="mb-1 text-sm text-zinc-300">Shape</div>
-        <div className="grid grid-cols-4 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
-          {SHAPE_BUTTONS.map(([t, label]) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => props.onShapeType(t)}
-              className={`rounded-md border px-1 py-2 text-center text-xs font-medium transition-colors ${
-                props.shapeType === t
-                  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
-                  : "border-transparent text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {props.shapeType !== "rectangle" && (
+        <ShapePicker
+          shapeType={props.shapeType}
+          onShapeType={props.onShapeType}
+        />
+        {props.shapeType === "custom" ? (
+          <>
+            <div className="mt-3 space-y-2">
+              <Slider
+                label="Crop width"
+                value={Math.round(props.shapeCropW * 100)}
+                min={5}
+                max={100}
+                step={5}
+                unit="%"
+                onChange={(v) => props.onShapeCropW(v / 100)}
+              />
+              <Slider
+                label="Crop height"
+                value={Math.round(props.shapeCropH * 100)}
+                min={5}
+                max={100}
+                step={5}
+                unit="%"
+                onChange={(v) => props.onShapeCropH(v / 100)}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-zinc-500">
+              Click or drag on the preview to position the crop. Width/height
+              are fractions of the image — everything outside the rectangle is
+              cut away.
+            </p>
+          </>
+        ) : (
+          props.shapeType !== "rectangle" && (
           <>
             <div className="mt-3">
               <Slider
@@ -211,7 +346,8 @@ export default function Controls(props: {
               is cut along the exact shape, so straight sides and curves come
               out smooth — not stepped along the pixel grid.
             </p>
-          </>
+            </>
+          )
         )}
       </div>
 

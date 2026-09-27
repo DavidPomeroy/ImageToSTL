@@ -18,9 +18,20 @@ import {
   meshPartPositions,
   processImageData,
 } from "../lib/pipeline";
-import { classifyPixels, makeShapeSilhouette } from "../lib/shapes";
+import {
+  classifyPixels,
+  makeShapeSilhouette,
+  shapePolygon,
+  SHAPE_CATEGORIES,
+} from "../lib/shapes";
 import { makeFineShapeGrid, buildShapeClippedGeometry } from "../lib/mesh";
 import { applyCurve, curveRadius } from "../lib/curve";
+import {
+  formatSliderValue,
+  parseSliderInput,
+  resolveSliderCommit,
+  stepDecimals,
+} from "../lib/slider";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -405,16 +416,51 @@ check(cls![7 * 8 + 7] === 0, "circle: corner pixel is outside");
   check(n2 > n1 && n2 > n0, `inside dominates (${n2} in, ${n0} out)`);
 }
 
-// shape sanity: centers inside, corners outside; star notch concave-out
+// shape sanity: centers inside (crescent moon's center is carved out, so
+// check a point on its left limb instead), corners outside
 for (const t of [
   "triangle",
   "hexagon",
   "heart",
   "star",
+  "diamond",
+  "cross",
+  "tree",
+  "snowflake",
+  "stocking",
+  "bell",
+  "gingerbread-man",
+  "gingerbread-woman",
+  "pumpkin",
+  "ghost",
+  "bat",
+  "leaf",
+  "acorn",
+  "egg",
+  "bunny",
+  "flower",
+  "tulip",
+  "butterfly",
+  "shamrock",
+  "sun",
+  "shell",
+  "starfish",
 ] as const) {
   const c = classifyPixels(16, 16, { type: t, cx: 0.5, cy: 0.5, size: 1 }, 0)!;
   check(c[8 * 16 + 8] === 2, `${t}: center inside`);
   check(c[0] === 0, `${t}: corner outside`);
+}
+{
+  // crescent moon: the middle is carved out, so the left limb is solid
+  const c = classifyPixels(
+    16,
+    16,
+    { type: "moon", cx: 0.5, cy: 0.5, size: 1 },
+    0
+  )!;
+  check(c[8 * 16 + 2] === 2, "moon: left limb inside");
+  check(c[8 * 16 + 8] === 0, "moon: center carved out");
+  check(c[0] === 0, "moon: corner outside");
 }
 {
   // square on a wide grid: far side is outside the shape
@@ -432,6 +478,118 @@ for (const t of [
   const px = Math.round(S / 2 + r * Math.cos(a) * (S / 2));
   const py = Math.round(S / 2 - r * Math.sin(a) * (S / 2));
   check(star[py * S + px] === 0, "star: inner notch is outside");
+}
+
+// outline sanity for every picker shape: the polygon must be simple (no
+// crossing or doubled-back edges) and must never enclose background pixels.
+// An arc sampled the wrong way round loops back through the shape's interior,
+// which the even-odd fill then carves out as a hole — the bug that produced
+// cut-outs in the gingerbread head, pumpkin stem, bell knob, ghost sides,
+// acorn cap, shamrock stem and moon horns. Regression test for those.
+{
+  /** Segments sharing an interior point: a proper crossing, or a collinear
+   *  overlap longer than EPS (the doubled-back-edge case). */
+  const segsMeet = (
+    a: [number, number],
+    b: [number, number],
+    c: [number, number],
+    d: [number, number]
+  ): boolean => {
+    const d1x = b[0] - a[0];
+    const d1y = b[1] - a[1];
+    const d2x = d[0] - c[0];
+    const d2y = d[1] - c[1];
+    const denom = d1x * d2y - d1y * d2x;
+    if (Math.abs(denom) > 1e-12) {
+      const t = ((c[0] - a[0]) * d2y - (c[1] - a[1]) * d2x) / denom;
+      const u = ((c[0] - a[0]) * d1y - (c[1] - a[1]) * d1x) / denom;
+      return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9;
+    }
+    const len1 = Math.hypot(d1x, d1y);
+    if (len1 < 1e-9) return false;
+    if (Math.abs((c[0] - a[0]) * d1y - (c[1] - a[1]) * d1x) / len1 > 1e-9) {
+      return false; // parallel but not collinear
+    }
+    const ux = d1x / len1;
+    const uy = d1y / len1;
+    const proj = (p: [number, number]) => (p[0] - a[0]) * ux + (p[1] - a[1]) * uy;
+    const lo = Math.max(0, Math.min(proj(c), proj(d)));
+    const hi = Math.min(len1, Math.max(proj(c), proj(d)));
+    return hi - lo > 1e-9;
+  };
+
+  const types = new Set<string>();
+  for (const cat of SHAPE_CATEGORIES) {
+    for (const s of cat.shapes) types.add(s.type);
+  }
+  const crossing: string[] = [];
+  const holed: string[] = [];
+  for (const t of types) {
+    const poly = shapePolygon(t as Parameters<typeof shapePolygon>[0]);
+    if (!poly) continue;
+    const n = poly.length;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        // skip edges that share a vertex
+        if ((j + 1) % n === i || (i + 1) % n === j) continue;
+        if (segsMeet(poly[i], poly[(i + 1) % n], poly[j], poly[(j + 1) % n])) {
+          crossing.push(`${t} e${i}xe${j}`);
+        }
+      }
+    }
+    // Rasterize at 0.82 size so the shape sits inside a background ring, then
+    // flood-fill the background from the frame (8-connected, so diagonal
+    // pinches don't count) — anything unreachable is an enclosed hole.
+    const S = 128;
+    const cls = classifyPixels(
+      S,
+      S,
+      { type: t as Parameters<typeof shapePolygon>[0], cx: 0.5, cy: 0.5, size: 0.82 },
+      0
+    )!;
+    const seen = new Uint8Array(S * S);
+    const stack: number[] = [];
+    const push = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= S || y >= S) return;
+      const k = y * S + x;
+      if (seen[k] || cls[k] !== 0) return;
+      seen[k] = 1;
+      stack.push(k);
+    };
+    for (let x = 0; x < S; x++) {
+      push(x, 0);
+      push(x, S - 1);
+    }
+    for (let y = 0; y < S; y++) {
+      push(0, y);
+      push(S - 1, y);
+    }
+    while (stack.length) {
+      const k = stack.pop()!;
+      const x = k % S;
+      const y = (k / S) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) push(x + dx, y + dy);
+      }
+    }
+    let trapped = 0;
+    for (let k = 0; k < S * S; k++) {
+      if (cls[k] === 0 && !seen[k]) trapped++;
+    }
+    if (trapped > 0) holed.push(`${t} (${trapped}px)`);
+  }
+  check(
+    crossing.length === 0,
+    `shape outlines never self-cross (${types.size} shapes` +
+      (crossing.length ? `, bad: ${crossing.join(", ")}` : "") +
+      ")"
+  );
+  check(
+    holed.length === 0,
+    `shape outlines carve no holes (${types.size} shapes` +
+      (holed.length ? `, bad: ${holed.join(", ")}` : "") +
+      ")"
+  );
 }
 
 // pipeline integration: circle mask + border on the quadrant mosaic
@@ -579,6 +737,29 @@ console.log("randomised plate sweep:");
     "star",
     "heart",
     "square",
+    "diamond",
+    "cross",
+    "tree",
+    "snowflake",
+    "stocking",
+    "bell",
+    "gingerbread-man",
+    "gingerbread-woman",
+    "pumpkin",
+    "ghost",
+    "bat",
+    "leaf",
+    "acorn",
+    "egg",
+    "bunny",
+    "flower",
+    "tulip",
+    "butterfly",
+    "shamrock",
+    "sun",
+    "shell",
+    "starfish",
+    "moon",
   ] as const;
   const modes = ["mosaic", "layered", "lithophane", "cmyk"] as const;
   const sweepPalette: RGB[] = [
@@ -1284,6 +1465,96 @@ function band2Radial(p: { meshes: { positions: number[] }[] }): number {
     const bad = countNonManifoldEdges(m.positions);
     check(bad === 0, `curved layered ${m.name}: manifold (${bad} bad edges)`);
   }
+}
+
+console.log("slider text input:");
+{
+  const P = (raw: string, min: number, max: number, step: number) =>
+    parseSliderInput(raw, min, max, step);
+  // a pasted unit is tolerated — the number is what matters
+  check(P("12 mm", 0, 20, 0.5) === 12, "typed value ignores a unit suffix");
+  check(P("12mm", 0, 20, 0.5) === 12, "typed value with a glued unit parses");
+  check(P("150%", 5, 150, 5) === 150, "typed percent parses (and may reach max)");
+  check(P(" 0.2 ", 0.08, 0.3, 0.04) === 0.2, "surrounding whitespace is ignored");
+  // clamped into the slider's range, never outside the state the UI allows
+  check(P("900", 32, 512, 8) === 512, "typed value above max clamps to max");
+  check(P("-4", 0, 5, 0.25) === 0, "typed value below min clamps to min");
+  check(P("0.31", 0.08, 0.3, 0.04) === 0.3, "typed value past the last step clamps to max");
+  // snapped onto the slider's own grid (min + k*step), without float noise
+  check(P("0.3", 0, 5, 0.25) === 0.25, "typed value snaps to the step grid");
+  check(P("0.16", 0.08, 0.3, 0.04) === 0.16, "snapped value carries no float noise");
+  check(P("0.4", 0, 5, 0.25) === 0.5, "typed value rounds to the nearer step");
+  check(P("3", 1, 8, 1) === 3, "typed integer passes through");
+  // junk reverts rather than zeroing the setting
+  check(P("", 0, 5, 0.5) === null, "empty entry reverts");
+  check(P("abc", 0, 5, 0.5) === null, "non-numeric entry reverts");
+  check(P("--", 0, 5, 0.5) === null, "punctuation-only entry reverts");
+  // commit rules: what a committed entry does to the value (null = leave it)
+  const C = (
+    raw: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    cancelled = false
+  ) => resolveSliderCommit(raw, value, min, max, step, cancelled);
+  check(C("0.6", 0.8, 0.4, 2, 0.2) === 0.6, "commit applies a typed value");
+  check(C("0.8", 0.8, 0.4, 2, 0.2) === null, "commit of the same value is a no-op");
+  check(C("0.6", 0.8, 0.4, 2, 0.2, true) === null, "Esc cancels the entry");
+  check(C("", 0.8, 0.4, 2, 0.2) === null, "commit of an empty field is a no-op");
+  check(C("abc", 0.8, 0.4, 2, 0.2) === null, "commit of junk is a no-op");
+  check(C("0.31", 0.8, 0.08, 0.3, 0.04) === 0.3, "commit clamps and snaps");
+
+  // display side
+  check(
+    stepDecimals(5) === 0 && stepDecimals(0.25) === 2 && stepDecimals(0.04) === 2,
+    "step decimals are derived from the step"
+  );
+  check(
+    formatSliderValue(0.30000000000000004, 0.2) === "0.3",
+    "display hides float noise"
+  );
+  check(formatSliderValue(2, 0.5) === "2", "display drops trailing zeros");
+  check(
+    formatSliderValue(92.5, 5) === "92.5",
+    "display shows the real value, not a snapped one"
+  );
+  // every pair of values in the app must survive the field: what it shows has
+  // to parse back to the same number, or editing one field would silently
+  // move a setting the user never touched
+  const sliders: [number, number, number, number][] = [
+    [4, 2, 16, 1], // number of colors
+    [120, 32, 512, 8], // resolution
+    [80, 5, 150, 5], // shape size (%)
+    [80, 5, 100, 5], // custom crop (%)
+    [1.5, 0, 5, 0.25], // border width
+    [180, 0, 360, 10], // curvature
+    [100, 40, 300, 5], // plate width
+    [0.8, 0.4, 2, 0.2], // min thickness
+    [5, 2, 12, 0.5], // plate depth
+    [16, 4, 30, 1], // white layers (max)
+    [0.2, 0.08, 0.3, 0.04], // print layer height
+  ];
+  check(
+    sliders.every(
+      ([v, mn, mx, st]) => P(formatSliderValue(v, st), mn, mx, st) === v
+    ),
+    "display → parse round trip is lossless for every slider"
+  );
+  // ... and so does a typed value on the step grid, clamped to the range
+  const grid = (v: number, mn: number, mx: number, st: number) => {
+    const k = Math.round((v - mn) / st);
+    const onGrid = Number((mn + k * st).toFixed(6));
+    return onGrid >= mn && onGrid <= mx && P(String(onGrid), mn, mx, st) === onGrid;
+  };
+  check(
+    sliders.every(([, mn, mx, st]) => {
+      let all = true;
+      for (let v = mn; v <= mx + 1e-9; v += st) all = all && grid(v, mn, mx, st);
+      return all;
+    }),
+    "every value on every slider's step grid round trips"
+  );
 }
 
 console.log("exports:");

@@ -15,7 +15,7 @@ import {
   type ProcessedImage,
 } from "@/lib/pipeline";
 import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
-import type { ShapeType } from "@/lib/shapes";
+import { customRectBounds, type ShapeType } from "@/lib/shapes";
 import { curveRadius } from "@/lib/curve";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 
@@ -69,6 +69,8 @@ export default function Home() {
   const [shapeCx, setShapeCx] = useState(0.5);
   const [shapeCy, setShapeCy] = useState(0.5);
   const [shapeSize, setShapeSize] = useState(1);
+  const [shapeCropW, setShapeCropW] = useState(0.8);
+  const [shapeCropH, setShapeCropH] = useState(0.8);
   const [borderMm, setBorderMm] = useState(0);
   const [curveDeg, setCurveDeg] = useState(0);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
@@ -172,6 +174,8 @@ export default function Home() {
                     cx: debouncedShapePos.cx,
                     cy: debouncedShapePos.cy,
                     size: shapeSize,
+                    w: shapeCropW,
+                    h: shapeCropH,
                   },
             borderMm,
           },
@@ -207,6 +211,8 @@ export default function Home() {
     shapeType,
     debouncedShapePos,
     shapeSize,
+    shapeCropW,
+    shapeCropH,
     borderMm,
     curveDeg,
   ]);
@@ -298,6 +304,8 @@ export default function Home() {
                 smooth={smooth}
                 shapeType={shapeType}
                 shapeSize={shapeSize}
+                shapeCropW={shapeCropW}
+                shapeCropH={shapeCropH}
                 borderMm={borderMm}
                 curveDeg={curveDeg}
                 onMode={setMode}
@@ -313,6 +321,8 @@ export default function Home() {
                 onSmooth={setSmooth}
                 onShapeType={setShapeType}
                 onShapeSize={setShapeSize}
+                onShapeCropW={setShapeCropW}
+                onShapeCropH={setShapeCropH}
                 onBorderMm={setBorderMm}
                 onCurveDeg={setCurveDeg}
               />
@@ -472,6 +482,21 @@ export default function Home() {
                               cy: shapeCy * processed.gh,
                               radiusPx: (shapeSize * Math.min(processed.gw, processed.gh)) / 2,
                               borderPx: borderMm / processed.pixelSizeMm,
+                              cropRect:
+                                shapeType === "custom"
+                                  ? customRectBounds(
+                                      {
+                                        type: shapeType,
+                                        cx: shapeCx,
+                                        cy: shapeCy,
+                                        size: shapeSize,
+                                        w: shapeCropW,
+                                        h: shapeCropH,
+                                      },
+                                      processed.gw,
+                                      processed.gh
+                                    )
+                                  : undefined,
                             }
                           : null
                       }

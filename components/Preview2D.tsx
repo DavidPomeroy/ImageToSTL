@@ -13,6 +13,8 @@ export interface ShapeOverlay {
   radiusPx: number;
   /** border width in image pixels (visualised as a thick outline) */
   borderPx: number;
+  /** pixel-space crop rect for type === "custom" (origin = top-left) */
+  cropRect?: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export default function Preview2D({
@@ -87,8 +89,28 @@ export default function Preview2D({
 
     // shape outline + center crosshair
     if (shapeOverlay) {
-      const { type, cx, cy, radiusPx, borderPx } = shapeOverlay;
-      if (type !== "rectangle") {
+      const { type, cx, cy, radiusPx, borderPx, cropRect } = shapeOverlay;
+      if (type === "custom") {
+        if (cropRect) {
+          ctx.strokeStyle = "rgba(52, 211, 153, 0.9)";
+          ctx.lineWidth = Math.max(1, borderPx > 0 ? Math.max(1, borderPx * 2) : 1);
+          ctx.strokeRect(
+            cropRect.x0,
+            cropRect.y0,
+            cropRect.x1 - cropRect.x0,
+            cropRect.y1 - cropRect.y0
+          );
+          // center crosshair
+          ctx.strokeStyle = "rgba(52, 211, 153, 0.7)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(cx - (cropRect.x1 - cropRect.x0) * 0.04, cy);
+          ctx.lineTo(cx + (cropRect.x1 - cropRect.x0) * 0.04, cy);
+          ctx.moveTo(cx, cy - (cropRect.y1 - cropRect.y0) * 0.04);
+          ctx.lineTo(cx, cy + (cropRect.y1 - cropRect.y0) * 0.04);
+          ctx.stroke();
+        }
+      } else if (type !== "rectangle") {
         const pts = shapeOutlinePoints(type);
         ctx.strokeStyle = "rgba(52, 211, 153, 0.9)";
         ctx.lineWidth = Math.max(1, borderPx > 0 ? Math.max(1, borderPx * 2) : 1);

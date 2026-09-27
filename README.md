@@ -51,6 +51,18 @@ filaments ("swap at z = 1.2, 2.6, 3.8 mm · layers 7, 13, 20"), mirroring
 HueForge's swap instructions. Slice with the same layer height you selected
 in the app.
 
+**Choosing more than four colors** — the *Number of colors* slider (2–16,
+default 4) appears in Mosaic and Layered mode only: Lithophane is
+single-filament and CMYK is always four. In the two palette modes the count is
+free — the 3MF carries one part, and one extruder assignment, per color — so
+5+ colors print on a toolchanger or with several AMS/MMU units chained. On a
+printer with fewer slots than colors, note the difference between the modes:
+
+- **Mosaic** needs every color present in the same XY plane, so all N filaments
+  must be loaded at once (a mid-print swap would leave gaps).
+- **Layered** only swaps (N − 1) times as the plate builds up, so extra colors
+  can be fed by swapping spools by hand at the swap heights the app lists.
+
 **Lithophane (backlit, single filament)** — thickness encodes brightness
 (each mode below has a *Surface: Pixelated / Smoothed* toggle — smoothed
 bilinearly interpolates relief heights between pixel centers, giving
@@ -84,6 +96,12 @@ npm run build
 npm start
 ```
 
+Every slider in the sidebar doubles as a text field: click a value, type an
+exact one and press Enter (or click away) to apply it. The entry is clamped to
+the slider's range and snapped to its step, a unit suffix is ignored (`12 mm`
+works as well as `12`), and Esc reverts. Dragging the slider handle still works
+as before, and the two stay in sync.
+
 ## Tests
 
 ```bash
@@ -93,7 +111,15 @@ npx tsx scripts/test-core.ts
 Covers quantization quality (k-means must recover 4 known clusters), rect
 merging, geometry bounds, wall orientation (outward-facing walls, signed volume
 against the fine-cell reference, directed-edge consistency), binary STL layout,
-and 3MF zip/XML structure.
+and 3MF zip/XML structure. It also walks every picker shape: the outline must be
+a simple polygon (no crossing or doubled-back edges) and must enclose no
+background pixels — an arc swept the wrong way folds back through the shape's
+interior and the even-odd fill carves it out as a hole, which is exactly the
+class of bug this check exists to catch. The slider text-entry rules are
+covered too: a typed value is clamped to the slider's range, snapped to its
+own step grid (the maximum stays reachable), and the display → parse round
+trip is exercised for every value on every slider, so editing one field can
+never silently move a setting.
 
 ## Project layout
 
@@ -105,6 +131,9 @@ lib/mesh.ts        pixel grid → merged rects → extruded box triangles
                    (arbitrary z0..z1 bands for layered mode)
 lib/exporters.ts   binary STL writer, multi-part 3MF (JSZip) writer
 lib/pipeline.ts    downscale + orchestration glue
+lib/shapes.ts      shape outlines (unit-space polygons), silhouette, classifier
+lib/slider.ts      slider text entry: parse, format, clamp and step-snap rules
+lib/curve.ts       plate bend around a vertical axis (flat → full cylinder)
 scripts/           core-logic test
 ```
 
@@ -126,10 +155,23 @@ scripts/           core-logic test
 
 ## Shapes & borders
 
-Besides the full-rectangle plate, the print can take a **square, triangle,
-hexagon, circle, heart or star** outline. Click or drag on the processed
-preview to position the shape, and scale it as a percentage of the plate.
-Pixels outside the shape become empty space, exactly like transparency.
+Besides the full-rectangle plate (**Full**) and a free **Custom** crop, the
+print can take one of **29 outline shapes**: square, circle, heart, star,
+diamond, cross, triangle, hexagon, Christmas tree, snowflake, stocking, bell,
+gingerbread man, gingerbread woman, pumpkin, ghost, bat, leaf, acorn, egg,
+bunny, flower, tulip, butterfly, shamrock, sun, shell, starfish and moon.
+They are grouped in the picker's collection dropdown — **Standard**,
+**Christmas**, **Halloween**, **Autumn**, **Easter**, **Spring**, **Summer**
+and **Occasions** — and choosing a collection selects its first shape straight
+away (Full and Custom sit above the dropdown and are always available). Click
+or drag on the processed preview to position the shape, and scale it as a
+percentage of the plate. Pixels outside the shape become empty space, exactly
+like transparency.
+
+The seasonal outlines are built from sampled arcs and béziers so every corner
+is round, and each one is checked by the test suite to be a *simple* polygon
+(no self-crossing or doubled-back edges) that encloses no background — a
+self-intersecting outline would be carved out by the even-odd fill as a hole.
 
 A **border** (0–5 mm) can be added to any shape (the full rectangle gets a
 frame around the image). Border rendering per mode:

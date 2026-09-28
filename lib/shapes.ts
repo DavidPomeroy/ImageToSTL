@@ -556,34 +556,10 @@ export function shapePolygon(
       // spring butterfly: raised forewings, round hindwings, slim body and
       // two thin antennae standing in the central notch
       return butterflyOutline();
-    case "shamrock": {
-      // 3 heart-ish lobes + stem: radial profile with 3 bumps. The clover ring
-      // is sampled with a gap at the bottom; the stem tab is spliced into that
-      // gap (its top corners are the ring points either side of the gap), so
-      // the outline is one loop that never doubles back across the body.
-      const N = 60;
-      const ring: [number, number][] = [];
-      let gapAt = -1; // ring index of the first point after the gap
-      for (let k = 0; k < N; k++) {
-        const t = (k * 2 * Math.PI) / N;
-        const dy = Math.sin(t);
-        if (dy < -0.35 && Math.abs(Math.cos(t)) < 0.18) {
-          if (gapAt < 0) gapAt = ring.length;
-          continue; // stem gap
-        }
-        const r = 0.45 + 0.35 * Math.pow(Math.abs(Math.cos(1.5 * t)), 0.8);
-        ring.push([r * Math.cos(t), r * Math.sin(t) + 0.15]);
-      }
-      if (gapAt < 0) gapAt = 0;
-      const pts: [number, number][] = ring.slice(0, gapAt);
-      // stem: down from the gap's left edge, across the bottom, back up to the
-      // gap's right edge
-      const left = ring[gapAt - 1] ?? ring[ring.length - 1];
-      const right = ring[gapAt] ?? ring[0];
-      pts.push([left[0], left[1]], [-0.1, -0.92], [0.1, -0.92], [right[0], right[1]]);
-      pts.push(...ring.slice(gapAt));
-      return pts;
-    }
+    case "shamrock":
+      // 3 heart-shaped lobes + curved stem: smooth outline modeled from
+      // high-fidelity silhouette reference with rounded notches and clefts
+      return shamrockOutline();
     case "sun": {
       // sun: round core with 8 triangular rays
       const pts: [number, number][] = [];
@@ -1108,6 +1084,113 @@ function butterflyOutline(): [number, number][] {
   }
   return pts;
 }
+/**
+ * Shamrock outline (template style): a classic 3-leaf clover with heart-shaped
+ * leaflets and a gracefully curved stem. Authored from high-fidelity reference
+ * silhouette with smooth rounded lobes, deep interior notches, and an asymmetric
+ * stem sweeping down to the right.
+ */
+function shamrockOutline(): [number, number][] {
+  return [
+    [ 0.4000,  0.3223],
+    [ 0.5911,  0.3860],
+    [ 0.6930,  0.3962],
+    [ 0.7592,  0.3834],
+    [ 0.8229,  0.3554],
+    [ 0.9070,  0.2815],
+    [ 0.9401,  0.2280],
+    [ 0.9631,  0.1618],
+    [ 0.9682,  0.0650],
+    [ 0.9605,  0.0217],
+    [ 0.9045, -0.0904],
+    [ 0.8459, -0.1465],
+    [ 0.7949, -0.1745],
+    [ 0.8459, -0.2484],
+    [ 0.8688, -0.3070],
+    [ 0.8790, -0.3605],
+    [ 0.8688, -0.4701],
+    [ 0.8331, -0.5490],
+    [ 0.7720, -0.6178],
+    [ 0.6981, -0.6637],
+    [ 0.6268, -0.6866],
+    [ 0.5045, -0.6866],
+    [ 0.4484, -0.6688],
+    [ 0.3924, -0.6357],
+    [ 0.2777, -0.5312],
+    [ 0.0917, -0.3121],
+    [ 0.0866, -0.3350],
+    [ 0.0968, -0.4395],
+    [ 0.1401, -0.5924],
+    [ 0.2166, -0.7350],
+    [ 0.3236, -0.8573],
+    [ 0.3287, -0.8752],
+    [ 0.3210, -0.8930],
+    [ 0.3083, -0.9210],
+    [ 0.2726, -0.9592],
+    [ 0.2115, -0.9975],
+    [ 0.1860, -1.0000],
+    [ 0.1070, -0.9032],
+    [ 0.0561, -0.8217],
+    [-0.0025, -0.6943],
+    [-0.0510, -0.4981],
+    [-0.0561, -0.2841],
+    [-0.1809, -0.4369],
+    [-0.3745, -0.6153],
+    [-0.4382, -0.6510],
+    [-0.4892, -0.6662],
+    [-0.6013, -0.6688],
+    [-0.6650, -0.6510],
+    [-0.7414, -0.6051],
+    [-0.7924, -0.5516],
+    [-0.8331, -0.4752],
+    [-0.8510, -0.3834],
+    [-0.8459, -0.3197],
+    [-0.8280, -0.2586],
+    [-0.7822, -0.1771],
+    [-0.8306, -0.1541],
+    [-0.8917, -0.1057],
+    [-0.9376, -0.0446],
+    [-0.9631,  0.0140],
+    [-0.9758,  0.0828],
+    [-0.9707,  0.1618],
+    [-0.9503,  0.2255],
+    [-0.9070,  0.2968],
+    [-0.8561,  0.3478],
+    [-0.8102,  0.3783],
+    [-0.6981,  0.4140],
+    [-0.5631,  0.4013],
+    [-0.3873,  0.3427],
+    [-0.3847,  0.3503],
+    [-0.5121,  0.5618],
+    [-0.5325,  0.6280],
+    [-0.5376,  0.7070],
+    [-0.5299,  0.7554],
+    [-0.4841,  0.8573],
+    [-0.4331,  0.9134],
+    [-0.3898,  0.9439],
+    [-0.3261,  0.9720],
+    [-0.2548,  0.9847],
+    [-0.1834,  0.9796],
+    [-0.1172,  0.9592],
+    [-0.0510,  0.9185],
+    [ 0.0000,  0.8650],
+    [ 0.0611,  0.9312],
+    [ 0.0968,  0.9567],
+    [ 0.1631,  0.9873],
+    [ 0.2268,  1.0000],
+    [ 0.3006,  0.9975],
+    [ 0.3822,  0.9720],
+    [ 0.4510,  0.9261],
+    [ 0.4943,  0.8803],
+    [ 0.5503,  0.7682],
+    [ 0.5605,  0.7121],
+    [ 0.5580,  0.6433],
+    [ 0.5223,  0.5363],
+    [ 0.3949,  0.3274],
+  ];
+}
+
+
 
 /**
  * Christmas tree outline (template style): a tall conifer in three tiers —

@@ -220,30 +220,10 @@ export function shapePolygon(
         [-a, a],
       ] as [number, number][];
     }
-    case "tree": {
-      // layered christmas tree, point up, trunk at the bottom
-      return [
-        [0, 1],
-        [0.22, 0.62],
-        [0.1, 0.62],
-        [0.34, 0.28],
-        [0.2, 0.28],
-        [0.48, -0.12],
-        [0.32, -0.12],
-        [0.6, -0.5],
-        [0.18, -0.5],
-        [0.18, -0.78],
-        [-0.18, -0.78],
-        [-0.18, -0.5],
-        [-0.6, -0.5],
-        [-0.32, -0.12],
-        [-0.48, -0.12],
-        [-0.2, 0.28],
-        [-0.34, 0.28],
-        [-0.1, 0.62],
-        [-0.22, 0.62],
-      ] as [number, number][];
-    }
+    case "tree":
+      // layered christmas tree: three tiers of rounded base corners over a
+      // flat-bottomed trunk
+      return treeOutline();
     case "snowflake": {
       // 6-armed snowflake: hexagon core with a spike on each vertex
       const pts: [number, number][] = [];
@@ -572,22 +552,10 @@ export function shapePolygon(
       );
       return pts;
     }
-    case "butterfly": {
-      // symmetric butterfly: big upper wings, small lower wings, body notch
-      const pts: [number, number][] = [];
-      const N = 48;
-      for (let k = 0; k < N; k++) {
-        const t = (k * 2 * Math.PI) / N;
-        const dx = Math.cos(t);
-        const dy = Math.sin(t);
-        let r: number;
-        if (dy >= 0) r = 0.95 - 0.25 * Math.abs(dx); // upper wings
-        else r = 0.6 - 0.3 * Math.abs(dx); // lower wings
-        if (Math.abs(dx) < 0.12) r = 0.28; // body pinch
-        pts.push([dx * r, dy * r * 0.9]);
-      }
-      return pts;
-    }
+    case "butterfly":
+      // spring butterfly: raised forewings, round hindwings, slim body and
+      // two thin antennae standing in the central notch
+      return butterflyOutline();
     case "shamrock": {
       // 3 heart-ish lobes + stem: radial profile with 3 bumps. The clover ring
       // is sampled with a gap at the bottom; the stem tab is spliced into that
@@ -984,6 +952,241 @@ function pumpkinOutline(): [number, number][] {
   // duplicated closing point rather than leave a zero-length edge
   const last = pts[pts.length - 1];
   if (Math.hypot(last[0] - pts[0][0], last[1] - pts[0][1]) < 1e-9) pts.pop();
+  return pts;
+}
+
+/**
+ * Butterfly outline (template style): two big forewings raised either side of
+ * a deep central notch, two round hindwings below them with a slight waist
+ * between the pairs, a slim body whose pointed abdomen hangs below the
+ * hindwings, and two thin antennae standing in the notch. Only the right half
+ * is authored — it runs clockwise from the head's top centre out over the
+ * right forewing, down the wing margins, round the hindwing and down the
+ * abdomen to its tip; the left half is that chain mirrored, and the two share
+ * the head's top centre and the abdomen tip (both sit on x = 0). Arcs cover
+ * the whole rounded wing margins, so the silhouette has no straight runs.
+ */
+function butterflyOutline(): [number, number][] {
+  const right: [number, number][] = [];
+  /** Append, skipping a point that would repeat the previous one — every
+   *  section below starts where the last one ended. */
+  const push = (x: number, y: number) => {
+    const last = right[right.length - 1];
+    if (last && Math.hypot(last[0] - x, last[1] - y) < 1e-9) return;
+    right.push([x, y]);
+  };
+  /** Arc; the body is walked clockwise, so the wing arcs count their angle
+   *  down (a1 < a0) and the sweep is taken through the points asked for. */
+  const arc = (
+    cx: number,
+    cy: number,
+    r: number,
+    a0: number,
+    a1: number,
+    n: number
+  ) => {
+    for (let k = 1; k <= n; k++) {
+      const a = a0 + ((a1 - a0) * k) / n;
+      push(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    }
+  };
+  const bez = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    n: number
+  ) => {
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const u = 1 - t;
+      push(
+        u * u * u * p0[0] +
+          3 * u * u * t * p1[0] +
+          3 * u * t * t * p2[0] +
+          t * t * t * p3[0],
+        u * u * u * p0[1] +
+          3 * u * u * t * p1[1] +
+          3 * u * t * t * p2[1] +
+          t * t * t * p3[1]
+      );
+    }
+  };
+  // Antenna: a thin stalk rising from the head with a short hook turning
+  // outward at the tip. Its centreline is sampled once, then offset either
+  // side by the half width, so both edges stay parallel and the tip is capped
+  // by a half circle.
+  const antHalf = 0.0085;
+  const spine: [number, number][] = [];
+  const spineBez = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    n: number
+  ) => {
+    for (let k = spine.length ? 1 : 0; k <= n; k++) {
+      const t = k / n;
+      const u = 1 - t;
+      spine.push([
+        u * u * u * p0[0] +
+          3 * u * u * t * p1[0] +
+          3 * u * t * t * p2[0] +
+          t * t * t * p3[0],
+        u * u * u * p0[1] +
+          3 * u * u * t * p1[1] +
+          3 * u * t * t * p2[1] +
+          t * t * t * p3[1],
+      ]);
+    }
+  };
+  spineBez([0.021, 0.098], [0.055, 0.235], [0.105, 0.375], [0.135, 0.45], 9);
+  spineBez([0.135, 0.45], [0.16, 0.47], [0.185, 0.462], [0.198, 0.455], 4);
+  /** Edge point at spine sample k: `side` +1 is the stalk's inner (left)
+   *  edge, -1 its outer edge. */
+  const edge = (k: number, side: number): [number, number] => {
+    const p = spine[k];
+    const a = spine[Math.max(0, k - 1)];
+    const b = spine[Math.min(spine.length - 1, k + 1)];
+    const tx = b[0] - a[0];
+    const ty = b[1] - a[1];
+    const L = Math.hypot(tx, ty) || 1;
+    return [p[0] - (side * ty * antHalf) / L, p[1] + (side * tx * antHalf) / L];
+  };
+  // head's top centre — the slot between the two antennae bottoms out here,
+  // and the mirrored left half starts from the same point
+  push(0, 0.096);
+  for (let k = 0; k < spine.length; k++) {
+    const [x, y] = edge(k, 1);
+    push(x, y);
+  }
+  // tip: round the hooked end from the inner edge to the outer edge
+  {
+    const p = spine[spine.length - 1];
+    const a = spine[spine.length - 2];
+    const tx = p[0] - a[0];
+    const ty = p[1] - a[1];
+    const L = Math.hypot(tx, ty) || 1;
+    const tX = tx / L;
+    const tY = ty / L;
+    const nX = -tY; // left of travel = the inner edge's normal
+    const nY = tX;
+    for (let k = 1; k <= 6; k++) {
+      const phi = Math.PI / 2 - (Math.PI * k) / 6;
+      push(
+        p[0] + antHalf * (Math.cos(phi) * tX + Math.sin(phi) * nX),
+        p[1] + antHalf * (Math.cos(phi) * tY + Math.sin(phi) * nY)
+      );
+    }
+  }
+  for (let k = spine.length - 1; k >= 0; k--) {
+    const [x, y] = edge(k, -1);
+    push(x, y);
+  }
+  // head's right shoulder dipping into the armpit between the head and the
+  // forewing's base, then the forewing's inner margin — the right arm of the
+  // central notch — rising to the wing's inner top corner
+  bez([0.03, 0.095], [0.075, 0.072], [0.084, 0.022], [0.146, 0.176], 6);
+  bez([0.146, 0.176], [0.245, 0.395], [0.325, 0.615], [0.376, 0.692], 7);
+  // forewing: one arc covers the rounded top and the outer margin, bulging
+  // out to x = 1 at the wing's widest point
+  arc(0.6, 0.36, 0.4, 2.164, -0.524, 14);
+  // the slight waist where forewing and hindwing meet on the outer edge
+  bez([0.946, 0.16], [0.945, 0.075], [0.935, -0.02], [0.941, -0.071], 5);
+  // hindwing: one arc covers its outer margin and its round bottom
+  arc(0.529, -0.3, 0.472, 0.506, -2.827, 16);
+  // hindwing's inner bottom sweeping up to where the abdomen leaves it: the
+  // white sliver either side of the abdomen opens off this short concave run
+  bez([0.08, -0.446], [0.068, -0.428], [0.055, -0.41], [0.045, -0.395], 3);
+  // abdomen: slim taper down to the pointed tip (shared with the left half)
+  bez([0.045, -0.395], [0.03, -0.47], [0.012, -0.57], [0, -0.65], 6);
+  // left half: the same chain mirrored, minus the two points it shares with
+  // the right half (both lie on x = 0, so mirroring would repeat them)
+  const pts = right.slice();
+  for (let k = right.length - 2; k >= 1; k--) {
+    pts.push([-right[k][0], right[k][1]]);
+  }
+  return pts;
+}
+
+/**
+ * Christmas tree outline (template style): a tall conifer in three tiers —
+ * each a straight flank closing in a rounded base corner over a short base
+ * shelf — standing on a flat-bottomed trunk whose corners are all but sharp.
+ * Every corner is replaced by a tangent arc, which is what gives the
+ * silhouette its soft clipart look. Only the right half is authored (crown
+ * tip, down the flanks and shelves to the trunk's bottom right corner); the
+ * left half is that chain mirrored, and the two share the crown tip on x = 0.
+ * The corners are the sharp skeleton — the arcs pull the silhouette a hair
+ * inside them, so the tree spans x = ±0.64 and y = -0.78..1 as measured.
+ */
+function treeOutline(): [number, number][] {
+  // Corners of the right half, crown first, walked clockwise so the tree's
+  // interior sits to the right of the walk, with the fillet radius of each:
+  // the crown tip and the three tier base corners round generously, the
+  // concave steps where the next tier's flank leaves a shelf only slightly,
+  // the trunk a hair.
+  const corner: [number, number][] = [
+    [0, 1.0345], // crown tip (its arc peaks at y = 1)
+    [0.277, 0.63], // tier 1's base corner
+    [0.186, 0.608], // step: tier 2's flank leaves tier 1's shelf
+    [0.455, 0.26], // tier 2's base corner
+    [0.207, 0.225], // step: tier 3's flank leaves tier 2's shelf
+    [0.683, -0.4], // tier 3's base corner (its arc reaches x = 0.64)
+    [0.192, -0.43], // step: the trunk's right side leaves tier 3's shelf
+    [0.192, -0.78], // trunk's bottom right corner
+  ];
+  const radius = [0.045, 0.04, 0.016, 0.045, 0.022, 0.045, 0.035, 0.02];
+  // the left half, mirrored, minus the crown tip (it sits on x = 0)
+  const loop = corner.slice();
+  const radii = radius.slice();
+  for (let k = corner.length - 1; k >= 1; k--) {
+    loop.push([-corner[k][0], corner[k][1]]);
+    radii.push(radius[k]);
+  }
+
+  const pts: [number, number][] = [];
+  const push = (x: number, y: number) => {
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(last[0] - x, last[1] - y) < 1e-9) return;
+    pts.push([x, y]);
+  };
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[(i + loop.length - 1) % loop.length];
+    const b = loop[i];
+    const c = loop[(i + 1) % loop.length];
+    const r = radii[i];
+    const l1 = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const l2 = Math.hypot(c[0] - b[0], c[1] - b[1]);
+    const u1x = (b[0] - a[0]) / l1;
+    const u1y = (b[1] - a[1]) / l1;
+    const u2x = (c[0] - b[0]) / l2;
+    const u2y = (c[1] - b[1]) / l2;
+    // signed turn: right (negative) at a convex corner of a clockwise walk
+    const turn = Math.atan2(u1x * u2y - u1y * u2x, u1x * u2x + u1y * u2y);
+    // the arc is tangent to both edges, r*tan(turn/2) back along the incoming
+    // one and the same distance on along the outgoing one; its centre sits on
+    // the interior side at a convex corner and on the outside at a concave
+    // one, so either way the arc cuts the corner off
+    const d = r * Math.abs(Math.tan(turn / 2));
+    const t1x = b[0] - u1x * d;
+    const t1y = b[1] - u1y * d;
+    const nx = turn < 0 ? u1y : -u1y;
+    const ny = turn < 0 ? -u1x : u1x;
+    const cx = t1x + nx * r;
+    const cy = t1y + ny * r;
+    push(t1x, t1y);
+    const a0 = Math.atan2(t1y - cy, t1x - cx);
+    // ~0.006 unit chords: small fillets stay cheap, big ones stay smooth
+    const steps = Math.max(
+      2,
+      Math.min(16, Math.round((Math.abs(turn) * r) / 0.006))
+    );
+    for (let k = 1; k <= steps; k++) {
+      const th = a0 + (turn * k) / steps;
+      push(cx + r * Math.cos(th), cy + r * Math.sin(th));
+    }
+  }
   return pts;
 }
 

@@ -224,22 +224,17 @@ export function shapePolygon(
       // layered christmas tree: three tiers of rounded base corners over a
       // flat-bottomed trunk
       return treeOutline();
-    case "snowflake": {
-      // 6-armed snowflake: hexagon core with a spike on each vertex
-      const pts: [number, number][] = [];
-      for (let k = 0; k < 6; k++) {
-        const a = (k * Math.PI) / 3; // vertex angle
-        const aNext = ((k + 1) * Math.PI) / 3;
-        const aMid = (a + aNext) / 2;
-        // valley between arms, then out to the spike tip, then back in
-        pts.push(
-          [0.42 * Math.cos(aMid - 0.18), 0.42 * Math.sin(aMid - 0.18)],
-          [1 * Math.cos(a), 1 * Math.sin(a)],
-          [0.42 * Math.cos(aMid + 0.18), 0.42 * Math.sin(aMid + 0.18)]
-        );
-      }
-      return pts;
-    }
+    case "snowflake":
+      // 6-armed coloring-page snowflake: solid silhouette measured from
+      // Pictures/Shapes/snowflake.jpg. Each 60-degree sector holds 10 corners
+      // (60 vertices total): a wide diamond main-arm tip, a stem notch, a
+      // deep valley, a pointed side branch at +/-30 deg, and the next arm's
+      // diamond edge. The polar radii/angles below are sector averages of
+      // segmented RDP fits of the traced outer boundary (center (324.5,406),
+      // tip radius 326.5 px); sector k is rotated by k*60 deg with the top
+      // tip at +Y. Kept solid (the reference's small center star is omitted)
+      // so the outline carves no holes.
+      return snowflakeOutline();
     case "stocking": {
       // christmas stocking: ONE continuous outer silhouette — a wide folded
       // cuff, a gently tapering leg and a heel-to-toe foot pointing right.
@@ -1268,6 +1263,36 @@ function treeOutline(): [number, number][] {
     for (let k = 1; k <= steps; k++) {
       const th = a0 + (turn * k) / steps;
       push(cx + r * Math.cos(th), cy + r * Math.sin(th));
+    }
+  }
+  return pts;
+}
+
+/**
+ * Snowflake outline: 60 vertices, 10 per 60-degree sector, walked clockwise
+ * from the top tip. See the `case "snowflake"` note for the provenance.
+ */
+function snowflakeOutline(): [number, number][] {
+  // [radius, clockwise degrees from the sector's arm axis], symmetrized so
+  // each sector mirrors across its 30-degree mid-ray.
+  const sector: [number, number][] = [
+    [1.0, 0],
+    [0.7209, 16.26],
+    [0.4908, 10.6],
+    [0.355, 17.0],
+    [0.579, 19.49],
+    [0.6864, 30],
+    [0.579, 40.51],
+    [0.355, 43.0],
+    [0.4908, 49.4],
+    [0.7209, 43.74],
+  ];
+  const pts: [number, number][] = [];
+  for (let k = 0; k < 6; k++) {
+    const base = k * 60;
+    for (const [r, a] of sector) {
+      const rad = ((base + a) * Math.PI) / 180;
+      pts.push([r * Math.sin(rad), r * Math.cos(rad)]);
     }
   }
   return pts;

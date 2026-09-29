@@ -3,8 +3,9 @@
 // The glyph is rasterized to a binary mask on an offscreen canvas, then:
 //  - background part = glyph dilated by `outlineMm` (the visible rim),
 //  - foreground part = glyph eroded by `insetMm` (the raised inner section).
-// Both parts are built with the existing manifold heightfield mesher, so the
-// export / preview path is identical to the image page.
+// Both parts are extruded from their masks by `smoothExtrude` (marching-squares
+// contours + smoothing, so no pixel stepping), sharing the exporters and the
+// 3D preview with the image page.
 
 import { buildSmoothExtrudedGeometry } from "./smoothExtrude";
 import { buildHeightfieldGeometry, type TriangleSoup } from "./mesh";

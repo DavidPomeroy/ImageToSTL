@@ -1,9 +1,14 @@
 # Image → Multi-Color 3D Print
 
-A small Next.js web app that turns any uploaded image into a **3D-printable
-plate** (default **5 mm thick**) — as a flat multi-color mosaic (2–16 filaments),
-a HueForge-style layered relief (2–16 filaments), a single-filament lithophane, or a
-full-color **CMYK lithophane** (Cyan / Magenta / Yellow / White filaments).
+A small Next.js web app with two tools that both export slicer-ready, multi-part 3MF / STL:
+
+- **Image → 3D** (`/`) — turns any uploaded image into a **3D-printable plate**
+  (default **5 mm thick**): a flat multi-color mosaic (2–16 filaments), a
+  HueForge-style layered relief, a single-filament lithophane, or a full-color
+  **CMYK lithophane** (Cyan / Magenta / Yellow / White filaments).
+- **Text → 3D** (`/text`) — turns a line of text into a freestanding
+  **two-colour name sign**: a background-colour rim with a raised
+  foreground-colour inner section.
 
 Everything runs **client-side in the browser**: no server, no uploads.
 
@@ -82,6 +87,84 @@ parts in print order — Cyan (bottom), Magenta, Yellow, White (top) — in one
 3MF, or as 4 STLs. Assign each part its filament in the slicer; an AMS/MMU
 handles the swaps automatically.
 
+## Text → 3D sign (`/text`)
+
+The second page makes a freestanding two-colour name sign from a line of text:
+a **background-coloured rim** with a **raised foreground-coloured inner
+section**. Two parts, one extruder each, exported as one 3MF (or an STL zip).
+
+**Controls** — text (newlines make multiple lines), font (Inter, Arial Black,
+Georgia, Pacifico, Lobster, Anton, Bebas Neue, or an uploaded font file),
+bold/italic, background + raised colours, then:
+
+| Control | Range | Meaning |
+| --- | --- | --- |
+| Object width | 40–300 mm | Total sign width *including* the outline; the font size is fitted to it |
+| Outline width (rim) | 0–6 mm | Dilation radius around the glyph — the visible rim |
+| Inner inset | 0–4 mm | Erosion radius inside the glyph — sets the raised stroke width |
+| Outline height | 1–10 mm | Height of the background part |
+| Raised text extra height | 0.4–5 mm | How much the inner section stands above the rim |
+| First letter size | 1–2.5× | Drop cap on the first character of the first line |
+
+**There is no letter-spacing control** — spacing is decided entirely by the
+code, because the only spacing that matters is the one that keeps the sign
+printable. See *Automatic letter spacing* below.
+
+### Uniform line weight, even with a drop cap
+
+A first letter drawn at 2× is naturally ~2× the stroke width of the rest of
+the text, which would give the rim a fat border and the raised section a fat
+stroke around just that one letter. The glyph is therefore **stroke-
+compensated at raster time**: the app estimates the normal half-stroke width
+`Hn` (the 90th percentile of inward depths across the non-drop-cap glyphs) and
+erodes the enlarged glyph's ink by `(s − 1)·Hn`, shrinking its strokes to match
+the others. The drop cap keeps its size, position and silhouette — only its
+stroke weight is normalised. Because the *glyph* is uniform, both downstream
+operations use a single radius everywhere: one dilation for the rim, one
+erosion for the raised section.
+
+### Automatic letter spacing (one connected background)
+
+The sign is a single object: the rim of neighbouring letters must touch, or
+the slicer sees a pile of separate islands. Spacing is solved per gap rather
+than exposed as a slider:
+
+1. **Inner text first.** The drop cap is compensated before layout, so the
+   measured ink is exactly the ink that gets drawn.
+2. **Per-letter border.** Each letter is rasterised on its own and its ink is
+   recorded **row by row** (canvas advance metrics alone miss italic overhang
+   and script swashes). The gap between two neighbours is then measured only
+   on the rows where *both* letters actually have ink — a bounding-box gap
+   underestimates the visible gap badly when a swash sits far below a
+   lower-case body, and that is what used to leave islands. The right-hand
+   letter is slid left until the true gap is at most `2·outline − 1.5 px`.
+3. **Verify on the real geometry.** A second pass rasterises each letter at
+   its final position, dilates each by the outline radius, and labels the
+   union; while more than one component survives, the measured
+   background-to-background gap is closed by shifting that letter (and the
+   ones after it) left. Repeat until the rim is one piece.
+
+Every step is **tighten-only** and keeps at least a pixel of ink clearance, so
+letters are never overlapped — they meet through the rim. Gaps differ per
+pair: wide pairs (an `R` next to a `u`) get pulled in more than naturally
+tight ones, which keeps their own spacing. Line gaps are capped the same way so
+multi-line text joins too. If something genuinely cannot be joined (an `i`
+dot with no shared rows), the app says so in a warning rather than silently
+drawing a bridge.
+
+### Smooth sign edges
+
+Sign parts are not meshed as pixel staircases. `lib/smoothExtrude.ts` samples
+the mask into a **sub-pixel coverage field**, runs **marching squares at level
+0.5** with linear interpolation (so edges land between pixels), simplifies
+with Ramer–Douglas–Peucker and applies closed **Chaikin** smoothing, then fills
+the caps with an even-odd scanline pass (which handles the counters in `e`,
+`o`, `a` as real holes) and builds outward-facing side walls between the
+shared z-levels of the two parts. Loops are oriented by nesting depth — outer
+counter-clockwise, holes clockwise — so wall normals point out of the
+material, and cap/wall edges are shared, keeping the parts manifold for the
+slicer.
+
 ## Run it
 
 ```bash
@@ -124,11 +207,20 @@ never silently move a setting.
 ## Project layout
 
 ```
-app/               Next.js app router page, layout, styles
-components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D
+app/               Next.js app router pages (/ image tool, /text sign tool),
+                   layout, styles
+components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D,
+                   TextControls (text sign controls), PreviewGeneric (shared
+                   multi-part 3D viewer)
 lib/quantize.ts    median cut + farthest-point seeded k-means, pixel mapping
 lib/mesh.ts        pixel grid → merged rects → extruded box triangles
                    (arbitrary z0..z1 bands for layered mode)
+lib/smoothExtrude.ts  binary mask → smooth extruded part: sub-pixel coverage
+                   field, marching-squares contours (level 0.5), RDP +
+                   Chaikin smoothing, even-odd scanline caps, side walls
+lib/textSign.ts    text sign geometry: glyph raster, drop-cap stroke
+                   compensation, automatic letter spacing / background
+                   joining, rim + raised masks, two parts
 lib/exporters.ts   binary STL writer, multi-part 3MF (JSZip) writer
 lib/pipeline.ts    downscale + orchestration glue
 lib/shapes.ts      shape outlines (unit-space polygons), silhouette, classifier
@@ -272,3 +364,11 @@ both pixelated and smoothed surfaces.
   the relief. More color layers per channel = stronger color but a taller,
   slower print. Colors will be less saturated than on screen — that's the
   physics of subtractive filament mixing.
+- Signs: print the background part on the bed and the raised text on top of
+  it, one filament per part. Keep the outline height at a multiple of your
+  layer height, and make the raised-text extra height at least one layer so
+  the inner section is not a sub-layer sliver.
+- Signs with a very large first letter: the app already thins the enlarged
+  glyph's strokes to match the rest, so the rim and the raised line weight
+  stay even. If letters end up very close together, widen the outline
+  instead of looking for a spacing control — there isn't one.

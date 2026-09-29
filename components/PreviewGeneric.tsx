@@ -1,0 +1,153 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { rgbToHex, type RGB } from "@/lib/quantize";
+
+export interface PreviewPart {
+  color: RGB;
+  positions: number[];
+}
+
+interface SceneCtx {
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  group: THREE.Group;
+  grid: THREE.GridHelper;
+}
+
+function disposeGroup(group: THREE.Group) {
+  for (const child of [...group.children]) {
+    const m = child as THREE.Mesh;
+    group.remove(m);
+    m.geometry?.dispose();
+    (m.material as THREE.Material | undefined)?.dispose();
+  }
+}
+
+/** Generic 3D preview for any list of colored triangle-soup parts. */
+export default function PreviewGeneric({
+  parts,
+  bboxMm,
+  centerMm,
+  fitNonce,
+}: {
+  parts: PreviewPart[];
+  bboxMm: { x: number; y: number; z: number };
+  centerMm: { x: number; y: number };
+  fitNonce: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const ctxRef = useRef<SceneCtx | null>(null);
+  const fittedFor = useRef(-1);
+  const stateRef = useRef({ parts, bboxMm, centerMm, fitNonce });
+  stateRef.current = { parts, bboxMm, centerMm, fitNonce };
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10000);
+    camera.position.set(140, 110, 170);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.1;
+    controls.addEventListener("start", () => {
+      controls.autoRotate = false;
+    });
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.15));
+    const key = new THREE.DirectionalLight(0xffffff, 1.7);
+    key.position.set(90, 160, 120);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.45);
+    fill.position.set(-110, -60, -90);
+    scene.add(fill);
+
+    const grid = new THREE.GridHelper(400, 40, 0x3f3f46, 0x27272a);
+    grid.position.y = -0.02;
+    scene.add(grid);
+
+    const group = new THREE.Group();
+    group.rotation.x = -Math.PI / 2;
+    scene.add(group);
+
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    loop();
+
+    const rebuild = () => {
+      const { parts, bboxMm, centerMm, fitNonce } = stateRef.current;
+      disposeGroup(group);
+      for (const part of parts) {
+        if (!part.positions || part.positions.length === 0) continue;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(part.positions), 3)
+        );
+        geo.computeVertexNormals();
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(rgbToHex(part.color)),
+          roughness: 0.8,
+          metalness: 0.02,
+        });
+        group.add(new THREE.Mesh(geo, mat));
+      }
+      group.position.set(-centerMm.x, 0, centerMm.y);
+      const maxDim = Math.max(bboxMm.x, bboxMm.y, bboxMm.z, 10);
+      grid.scale.setScalar(maxDim / 200);
+      if (fittedFor.current !== fitNonce) {
+        fittedFor.current = fitNonce;
+        const dist = (maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360))) * 1.45;
+        camera.position.set(dist * 0.72, dist * 0.6, dist * 0.85);
+        camera.near = Math.max(0.1, dist / 200);
+        camera.far = dist * 20;
+        camera.updateProjectionMatrix();
+        controls.target.set(0, bboxMm.z / 2, 0);
+        controls.update();
+      }
+    };
+    rebuild();
+    const id = setInterval(rebuild, 400);
+
+    const resize = () => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (!w || !h) return;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(container);
+    resize();
+
+    ctxRef.current = { camera, controls, group, grid };
+
+    return () => {
+      clearInterval(id);
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+      controls.dispose();
+      disposeGroup(group);
+      renderer.dispose();
+      renderer.domElement.remove();
+      ctxRef.current = null;
+    };
+  }, []);
+
+  return <div ref={containerRef} className="h-full w-full" />;
+}

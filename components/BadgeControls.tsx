@@ -25,6 +25,9 @@ export interface BadgeControlValues {
   heightMm: number;
   cornerMm: number;
   plateMm: number;
+  /** "raised" = text extruded on top (two colours);
+   *  "engraved" = text recessed into the plate (single colour). */
+  textStyle: "raised" | "engraved";
   textMm: number;
   textScale: number;
   marginMm: number;
@@ -135,18 +138,50 @@ export default function BadgeControls({
           color={v.plateColor}
           onChange={(plateColor) => onChange({ plateColor })}
         />
-        <Swatch
-          label="Text colour"
-          color={v.textColor}
-          onChange={(textColor) => onChange({ textColor })}
-        />
+        {v.textStyle === "raised" && (
+          <Swatch
+            label="Text colour"
+            color={v.textColor}
+            onChange={(textColor) => onChange({ textColor })}
+          />
+        )}
       </div>
+
+      <div className="flex gap-2">
+        {(["raised", "engraved"] as const).map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => onChange({ textStyle: s })}
+            className={`flex-1 rounded-lg border px-3 py-2 text-sm capitalize transition-colors ${
+              v.textStyle === s
+                ? "border-emerald-500/40 bg-emerald-500/15 font-medium text-emerald-300"
+                : "border-zinc-800 text-zinc-400 hover:bg-zinc-900"
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+      <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
+        {v.textStyle === "raised"
+          ? "Raised text is extruded on top of the plate (two colours)."
+          : "Engraved text is recessed into the plate — prints in one filament."}
+      </p>
 
       <Slider label="Width" value={v.widthMm} min={20} max={120} step={1} unit=" mm" onChange={(widthMm) => onChange({ widthMm })} />
       <Slider label="Height" value={v.heightMm} min={20} max={120} step={1} unit=" mm" onChange={(heightMm) => onChange({ heightMm })} />
       <Slider label="Corner radius" value={v.cornerMm} min={0} max={30} step={0.5} unit=" mm" onChange={(cornerMm) => onChange({ cornerMm })} />
       <Slider label="Plate thickness" value={v.plateMm} min={1} max={6} step={0.2} unit=" mm" onChange={(plateMm) => onChange({ plateMm })} />
-      <Slider label="Text height" value={v.textMm} min={0.4} max={4} step={0.1} unit=" mm" onChange={(textMm) => onChange({ textMm })} />
+      <Slider
+        label={v.textStyle === "raised" ? "Text height" : "Engrave depth"}
+        value={v.textMm}
+        min={0.4}
+        max={v.textStyle === "raised" ? 4 : Math.max(0.5, v.plateMm - 0.4)}
+        step={0.1}
+        unit=" mm"
+        onChange={(textMm) => onChange({ textMm })}
+      />
       <Slider label="Text size" value={v.textScale} min={0.3} max={1} step={0.05} unit="×" onChange={(textScale) => onChange({ textScale })} />
       <Slider label="Margin" value={v.marginMm} min={1} max={15} step={0.5} unit=" mm" onChange={(marginMm) => onChange({ marginMm })} />
 

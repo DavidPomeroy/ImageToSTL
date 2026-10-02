@@ -1835,6 +1835,7 @@ const badgeRes = buildBadgeFromMasks(
   {
     plateMm: 3,
     textMm: 1,
+    textStyle: "raised",
     plateColor: [0, 0, 255] as RGB,
     textColor: [255, 255, 255] as RGB,
   }
@@ -1849,6 +1850,34 @@ check(badgeBad === 0, `badge parts manifold (${badgeBad} bad edges)`);
 check(
   Math.abs(badgeRes.bboxMm.z - 4) < 1e-6,
   `badge depth = plate + text (${badgeRes.bboxMm.z})`
+);
+
+// engraved: single plate-colour part, text recessed, plate depth unchanged
+const badgeEngraved = buildBadgeFromMasks(
+  badgePlateMask,
+  badgeTextMask,
+  bGw,
+  bGh,
+  0.5,
+  {
+    plateMm: 3,
+    textMm: 1,
+    textStyle: "engraved",
+    plateColor: [0, 0, 255] as RGB,
+    textColor: [255, 255, 255] as RGB,
+  }
+);
+check(
+  badgeEngraved.parts.length === 1,
+  `engraved badge has one part (${badgeEngraved.parts.length})`
+);
+let engravedBad = 0;
+for (const p of badgeEngraved.parts)
+  engravedBad += countNonManifoldEdges(p.positions);
+check(engravedBad === 0, `engraved badge part manifold (${engravedBad} bad edges)`);
+check(
+  Math.abs(badgeEngraved.bboxMm.z - 3) < 1e-6,
+  `engraved badge depth = plate only (${badgeEngraved.bboxMm.z})`
 );
 
 // keyring hole placement: shapes whose top is concave (heart) or pointy (star)

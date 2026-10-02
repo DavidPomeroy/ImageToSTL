@@ -9,8 +9,8 @@ A small Next.js web app with five tools that all export slicer-ready, multi-part
 - **Text → 3D** (`/text`) — turns a line of text into a freestanding
   **two-colour name sign**: a background-colour rim with a raised
   foreground-colour inner section.
-- **Badge → 3D** (`/badge`) — a shaped **name badge / keychain**: raised text on
-  a plate with an optional keyring hole.
+- **Badge → 3D** (`/badge`) — a shaped **name badge / keychain**: raised or
+  engraved text on a plate with an optional keyring hole.
 - **Coaster → 3D** (`/coaster`) — an image on a round / hex / octagon / square
   **coaster** with a raised rim (flat multi-colour mosaic or a single-filament
   relief).
@@ -177,9 +177,10 @@ slicer.
 
 ## Badge → 3D keychain (`/badge`)
 
-A shaped **name badge / keychain**: raised text on a plate, with an optional
-keyring hole. Two colours (plate + raised text), exported as one 3MF or an STL
-zip.
+A shaped **name badge / keychain** with raised or engraved text on a plate and
+an optional keyring hole. Raised mode is two colours (plate + raised text);
+engraved mode recesses the text into the plate and prints in one filament.
+Exported as one 3MF or an STL zip.
 
 - **Shape** — rounded rectangle, rectangle, circle, dog tag, hexagon, heart or
   star.
@@ -191,11 +192,15 @@ zip.
   left end and the text shifts right to clear it. On shapes whose top is concave
   or pointy (**heart**, **star**) the hole is placed at the highest spot inside
   the material where it fits, so it never lands in the notch or the point.
+- **Text style** — **raised** extrudes the text on top (plate + text parts, two
+  colours); **engraved** carves it into the plate (single plate-colour part,
+  engrave depth leaves ≥ 0.4 mm of floor).
 
-Both parts are extruded on a **fine pixel grid** (0.12 mm) with the shared
+Both modes are extruded on a **fine pixel grid** (0.12 mm) with the shared
 manifold heightfield mesher, so the stepped edges stay below the nozzle size and
-slicers never ask to repair the mesh. Print the plate in the plate colour and
-swap (or use a second extruder) for the raised text.
+slicers never ask to repair the mesh. Raised: print the plate in the plate
+colour and swap (or use a second extruder) for the text. Engraved: single
+filament, slice with the engraved side up.
 
 ## Coaster → 3D (`/coaster`)
 
@@ -363,7 +368,7 @@ lib/geo.ts         Web-Mercator tile math (bbox ↔ tiles, zoom, ground size)
 lib/geocode.ts     place-name search via OpenStreetMap Nominatim
 lib/bounds.ts      bounding box + centre of triangle-soup parts
 lib/masks.ts       canvas shape masks (badge/coaster) + erode / hole ops
-lib/badge.ts       badge geometry: shaped plate + raised text + keyring hole
+lib/badge.ts       badge geometry: shaped plate + raised/engraved text + keyring hole
 lib/coaster.ts     coaster geometry: shaped base + mosaic colours / relief
 lib/buildings.ts   OSM building footprints (Overpass) → extruded prisms
 scripts/           core-logic test

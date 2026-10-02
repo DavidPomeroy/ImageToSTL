@@ -94,6 +94,7 @@ const DEFAULT_CFG: BadgeControlValues = {
   heightMm: 30,
   cornerMm: 6,
   plateMm: 3,
+  textStyle: "raised",
   textMm: 1,
   textScale: 0.8,
   marginMm: 4,
@@ -145,6 +146,7 @@ export default function BadgePage() {
             heightMm: debCfg.heightMm,
             cornerMm: debCfg.cornerMm,
             plateMm: debCfg.plateMm,
+            textStyle: debCfg.textStyle,
             textMm: debCfg.textMm,
             textScale: debCfg.textScale,
             marginMm: debCfg.marginMm,
@@ -248,16 +250,26 @@ export default function BadgePage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
     const img = ctx.createImageData(w, h);
+    // Engraved text is recessed plate surface: shade it darker so the 2D
+    // preview reads as a carving rather than a second colour.
+    const shade = (c: number[]): number[] => [
+      Math.round(c[0] * 0.45),
+      Math.round(c[1] * 0.45),
+      Math.round(c[2] * 0.45),
+    ];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const sx = Math.min(gw - 1, Math.floor(x / scale));
         const sy = Math.min(gh - 1, Math.floor(y / scale));
         const i = sy * gw + sx;
-        const c = textMask[i]
-          ? debCfg.textColor
-          : plateMask[i]
-            ? debCfg.plateColor
-            : [24, 24, 27];
+        const c =
+          textMask[i] && plateMask[i]
+            ? debCfg.textStyle === "raised"
+              ? debCfg.textColor
+              : shade(debCfg.plateColor)
+            : plateMask[i]
+              ? debCfg.plateColor
+              : [24, 24, 27];
         const o = (y * w + x) * 4;
         img.data[o] = c[0];
         img.data[o + 1] = c[1];
@@ -267,7 +279,7 @@ export default function BadgePage() {
     }
     ctx.putImageData(img, 0, 0);
     return canvas.toDataURL();
-  }, [result, debCfg.plateColor, debCfg.textColor]);
+  }, [result, debCfg.plateColor, debCfg.textColor, debCfg.textStyle]);
 
 
   return (
@@ -279,9 +291,12 @@ export default function BadgePage() {
             Badge <span className="text-zinc-500">→</span> 3D Keychain
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            A shaped name badge or keychain: engraved-style raised text on a
-            plate, with an optional keyring hole. Two colours, exported as one
-            3MF (or an STL zip). Everything runs locally in your browser.
+            A shaped name badge or keychain: raised or engraved text on a
+            plate, with an optional keyring hole.{" "}
+            {cfg.textStyle === "raised"
+              ? "Two colours, exported as one 3MF (or an STL zip)."
+              : "Single colour, exported as one 3MF (or an STL)."}
+            Everything runs locally in your browser.
           </p>
         </header>
 
@@ -368,13 +383,15 @@ export default function BadgePage() {
                       Triangles:{" "}
                       {Math.round(result.triangleCount).toLocaleString()}
                     </span>
-                    <span>Parts: {parts.length} (plate + text)</span>
+                    <span>
+                      Parts: {parts.length} (
+                      {cfg.textStyle === "raised" ? "plate + text" : "plate"})
+                    </span>
                   </div>
                   <p className="mb-4 max-w-2xl text-xs leading-relaxed text-zinc-500">
-                    Print the plate in the plate colour, swap (or use a second
-                    extruder) for the raised text. In the slicer, import the 3MF
-                    as one object with multiple parts and assign an extruder to
-                    each colour.
+                    {cfg.textStyle === "raised"
+                      ? "Print the plate in the plate colour, swap (or use a second extruder) for the raised text. In the slicer, import the 3MF as one object with multiple parts and assign an extruder to each colour."
+                      : "Single-colour print — slice with the engraved side up."}
                   </p>
                   <div className="flex flex-wrap gap-3">
                     <button
@@ -387,7 +404,9 @@ export default function BadgePage() {
                         ? "Building 3MF…"
                         : processing
                           ? "Updating model…"
-                          : "Download 3MF (2 colour parts)"}
+                          : cfg.textStyle === "raised"
+                            ? "Download 3MF (2 colour parts)"
+                            : "Download 3MF"}
                     </button>
                     <button
                       type="button"
@@ -399,7 +418,9 @@ export default function BadgePage() {
                         ? "Building STL…"
                         : processing
                           ? "Updating model…"
-                          : "Download STL zip"}
+                          : cfg.textStyle === "raised"
+                            ? "Download STL zip"
+                            : "Download STL"}
                     </button>
                   </div>
                 </div>

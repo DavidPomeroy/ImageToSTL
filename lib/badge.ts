@@ -1,9 +1,15 @@
-// Badge / keychain geometry: a shaped plate with raised text and an optional
-// keyring hole. Text is rasterized from a font onto the shaped mask and both
-// parts are extruded as manifold heightfields (fine pixels keep the stepped
-// edges below the nozzle size). Two colours: plate + raised text.
+// Badge / keychain geometry: a shaped plate with raised or engraved text and an
+// optional keyring hole. Text is rasterized from a font onto the shaped mask.
+// Raised mode extrudes two parts as manifold heightfields (plate + text on
+// top, two colours); engraved mode carves the text into the plate as a single
+// plate-colour part (fine pixels keep the stepped edges below the nozzle
+// size).
 
-import { buildMaskExtrusion, type TriangleSoup } from "./mesh";
+import {
+  buildHeightfieldGeometry,
+  buildMaskExtrusion,
+  type TriangleSoup,
+} from "./mesh";
 import { modelBounds } from "./bounds";
 import {
   badgeShapeMask,
@@ -26,8 +32,12 @@ export interface BadgeInput {
   cornerMm: number;
   /** Plate thickness (mm). */
   plateMm: number;
-  /** Height the text rises above the plate (mm). */
+  /** Raised: height the text rises above the plate (mm).
+   *  Engraved: depth carved into the plate (mm). */
   textMm: number;
+  /** "raised" extrudes the text on top (two colours);
+   *  "engraved" recesses it into the plate (single colour). */
+  textStyle: "raised" | "engraved";
   /** Multiplier on the auto-fitted font size (0.3–1). */
   textScale: number;
   /** Inset from the edge for text / content (mm). */
@@ -125,7 +135,7 @@ function rasterizeText(
   return mask;
 }
 
-/** Rasterize the plate silhouette, the raised text and the keyring hole. */
+/** Rasterize the plate silhouette, the raised/engraved text and the keyring hole. */
 export function rasterizeBadge(input: BadgeInput): {
   plateMask: Uint8Array;
   textMask: Uint8Array;
@@ -178,7 +188,7 @@ export function rasterizeBadge(input: BadgeInput): {
   return { plateMask, textMask, gw, gh, pixelMm };
 }
 
-/** Assemble the two parts from pre-rasterized masks (pure / testable). */
+/** Assemble the part(s) from pre-rasterized masks (pure / testable). */
 export function buildBadgeFromMasks(
   plateMask: Uint8Array,
   textMask: Uint8Array,
@@ -188,49 +198,79 @@ export function buildBadgeFromMasks(
   opts: {
     plateMm: number;
     textMm: number;
+    textStyle: "raised" | "engraved";
     plateColor: RGB;
     textColor: RGB;
   }
 ): BadgeResult {
   const parts: BadgePart[] = [];
   const warnings: string[] = [];
+  let depthMm = opts.plateMm;
 
-  const plate = buildMaskExtrusion(
-    plateMask,
-    gw,
-    gh,
-    pixelMm,
-    0,
-    opts.plateMm
-  );
-  if (plate.length)
-    parts.push({
-      name: "Badge",
-      color: opts.plateColor,
-      z0: 0,
-      z1: opts.plateMm,
-      positions: plate,
-    });
+  if (opts.textStyle === "engraved") {
+    // Single plate-colour part: full plate with the text recessed into the top
+    // surface. Depth is clamped so at least 0.4 mm of floor remains (never
+    // deeper than plate − 0.4, never below 0).
+    const depth = Math.min(
+      Math.max(0, opts.textMm),
+      Math.max(0, opts.plateMm - 0.4)
+    );
+    const n = gw * gh;
+    const z0s = new Float32Array(n);
+    const z1s = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      if (!plateMask[i]) continue;
+      z0s[i] = 0;
+      z1s[i] = textMask[i] ? Math.max(0, opts.plateMm - depth) : opts.plateMm;
+    }
+    const positions = buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelMm);
+    if (positions.length)
+      parts.push({
+        name: "Badge",
+        color: opts.plateColor,
+        z0: 0,
+        z1: opts.plateMm,
+        positions,
+      });
+    depthMm = opts.plateMm;
+  } else {
+    const plate = buildMaskExtrusion(
+      plateMask,
+      gw,
+      gh,
+      pixelMm,
+      0,
+      opts.plateMm
+    );
+    if (plate.length)
+      parts.push({
+        name: "Badge",
+        color: opts.plateColor,
+        z0: 0,
+        z1: opts.plateMm,
+        positions: plate,
+      });
 
-  const text = buildMaskExtrusion(
-    textMask,
-    gw,
-    gh,
-    pixelMm,
-    opts.plateMm,
-    opts.plateMm + opts.textMm
-  );
-  if (text.length)
-    parts.push({
-      name: "Text",
-      color: opts.textColor,
-      z0: opts.plateMm,
-      z1: opts.plateMm + opts.textMm,
-      positions: text,
-    });
+    const text = buildMaskExtrusion(
+      textMask,
+      gw,
+      gh,
+      pixelMm,
+      opts.plateMm,
+      opts.plateMm + opts.textMm
+    );
+    if (text.length)
+      parts.push({
+        name: "Text",
+        color: opts.textColor,
+        z0: opts.plateMm,
+        z1: opts.plateMm + opts.textMm,
+        positions: text,
+      });
+    depthMm = opts.plateMm + (text.length ? opts.textMm : 0);
+  }
 
   const { bboxMm, centerMm } = modelBounds(parts);
-  const depthMm = opts.plateMm + (text.length ? opts.textMm : 0);
   const triangleCount = parts.reduce((s, p) => s + p.positions.length, 0) / 9;
   if (parts.length === 0)
     warnings.push("Nothing to build — check the text and shape.");
@@ -262,6 +302,7 @@ export function buildBadge(
   return buildBadgeFromMasks(plateMask, textMask, gw, gh, pixelMm, {
     plateMm: input.plateMm,
     textMm: input.textMm,
+    textStyle: input.textStyle,
     plateColor,
     textColor,
   });

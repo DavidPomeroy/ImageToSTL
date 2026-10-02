@@ -80,9 +80,29 @@ export function buildHeightfieldGeometry(
     }
   }
 
+  // First cut index whose strip [cuts[c], cuts[c+1]] can overlap [lo, hi].
+  // Binary search keeps per-boundary work proportional to the emitted strips
+  // instead of scanning every global cut (which explodes on heightfields that
+  // have a distinct z per cell, e.g. terrain).
+  const cutStart = (lo: number): number => {
+    let a = 0,
+      b = cuts.length - 2,
+      ans = -1;
+    while (a <= b) {
+      const m = (a + b) >> 1;
+      if (cuts[m + 1] > lo) {
+        ans = m;
+        b = m - 1;
+      } else a = m + 1;
+    }
+    return ans;
+  };
+
   // For a boundary between cell intervals [a0,a1] and [b0,b1] (empty cell =
   // no interval), call emitA/emitB for each global-cut strip that is solid
-  // in exactly one of the two cells.
+  // in exactly one of the two cells. Only strips intersecting the union of
+  // the two intervals are visited — strips outside it are solid in neither
+  // cell, so they were always skipped.
   const emitStrips = (
     aSolid: boolean,
     a0: number,
@@ -93,15 +113,28 @@ export function buildHeightfieldGeometry(
     emitA: (lo: number, hi: number) => void,
     emitB: (lo: number, hi: number) => void
   ) => {
-    for (let c = 0; c + 1 < cuts.length; c++) {
-      const lo = cuts[c],
-        hi = cuts[c + 1];
-      const mid = (lo + hi) / 2;
+    let lo = Infinity;
+    let hi = -Infinity;
+    if (aSolid) {
+      if (a0 < lo) lo = a0;
+      if (a1 > hi) hi = a1;
+    }
+    if (bSolid) {
+      if (b0 < lo) lo = b0;
+      if (b1 > hi) hi = b1;
+    }
+    if (lo >= hi) return;
+    let c = cutStart(lo);
+    if (c < 0) return;
+    for (; c + 1 < cuts.length && cuts[c] < hi; c++) {
+      const clo = cuts[c],
+        chi = cuts[c + 1];
+      const mid = (clo + chi) / 2;
       const inA = aSolid && a0 < mid && mid < a1;
       const inB = bSolid && b0 < mid && mid < b1;
       if (inA === inB) continue;
-      if (inA) emitA(lo, hi);
-      else emitB(lo, hi);
+      if (inA) emitA(clo, chi);
+      else emitB(clo, chi);
     }
   };
 
@@ -170,6 +203,31 @@ export function buildHeightfieldGeometry(
   }
 
   return out;
+}
+
+/**
+ * Extrude a binary mask to a solid prism over [z0, z1] (manifold heightfield:
+ * cells outside the mask are empty). Used by the badge / coaster tools, where
+ * a fine pixel grid keeps the stepped edges below the nozzle size.
+ */
+export function buildMaskExtrusion(
+  mask: Uint8Array,
+  gw: number,
+  gh: number,
+  pixelSize: number,
+  z0: number,
+  z1: number
+): TriangleSoup {
+  const n = gw * gh;
+  const z0s = new Float32Array(n);
+  const z1s = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (mask[i]) {
+      z0s[i] = z0;
+      z1s[i] = z1;
+    }
+  }
+  return buildHeightfieldGeometry(z0s, z1s, gw, gh, pixelSize);
 }
 
 /**

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Dropzone from "@/components/Dropzone";
 import Controls from "@/components/Controls";
+import ToolNav from "@/components/ToolNav";
 import PaletteEditor from "@/components/PaletteEditor";
 import Preview2D from "@/components/Preview2D";
 import { LoadingOverlay, Spinner } from "@/components/Spinner";
@@ -262,17 +263,7 @@ export default function Home() {
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <header className="mb-8">
-          <nav className="mb-4 flex gap-2 text-sm">
-            <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 py-1.5 font-medium text-emerald-300">
-              Image → 3D
-            </span>
-            <a
-              href="/text"
-              className="rounded-lg border border-zinc-800 px-3 py-1.5 text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
-            >
-              Text → 3D
-            </a>
-          </nav>
+          <ToolNav active="/" />
           <h1 className="text-3xl font-bold tracking-tight">
             Image <span className="text-zinc-500">→</span> 4-Color 3D Print
           </h1>

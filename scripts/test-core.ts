@@ -32,6 +32,31 @@ import {
   resolveSliderCommit,
   stepDecimals,
 } from "../lib/slider";
+import {
+  bboxFromCenter,
+  groundSizeMeters,
+  latToTileY,
+  lngToTileX,
+  tileRangeForBbox,
+  tileXToLng,
+  tileYToLat,
+  zoomForTargetPixels,
+} from "../lib/geo";
+import { decodeTerrarium, resampleBilinear } from "../lib/terrainTiles";
+import {
+  buildTerrainFromHeights,
+  normFromElevations,
+} from "../lib/terrain";
+import { buildBadgeFromMasks } from "../lib/badge";
+import { chamferToZero } from "../lib/textSign";
+import { clearCircle, fitHole, runCentre } from "../lib/masks";
+import { buildCoasterFromGrid, RELIEF_LEVELS } from "../lib/coaster";
+import {
+  buildBuildingParts,
+  buildingHeight,
+  type BuildingContext,
+  type BuildingFootprint,
+} from "../lib/buildings";
 import JSZip from "jszip";
 
 let failures = 0;
@@ -1557,6 +1582,436 @@ console.log("slider text input:");
   );
 }
 
+console.log("terrain / geo:");
+check(
+  Math.abs(tileXToLng(lngToTileX(11.5, 10), 10) - 11.5) < 1e-9,
+  "lng -> tileX -> lng round trip"
+);
+check(
+  Math.abs(tileYToLat(latToTileY(46.5, 10), 10) - 46.5) < 1e-6,
+  "lat -> tileY -> lat round trip"
+);
+
+const trSmall = bboxFromCenter({ lat: 46.5, lng: 7.9 }, 2000, 2000);
+const trBig = bboxFromCenter({ lat: 46.5, lng: 7.9 }, 200000, 200000);
+check(
+  zoomForTargetPixels(trSmall, 160) > zoomForTargetPixels(trBig, 160),
+  "smaller selection -> higher tile zoom"
+);
+check(
+  zoomForTargetPixels(trSmall, 160) <= 15,
+  "terrain zoom clamps to 15"
+);
+
+const trGs = groundSizeMeters(bboxFromCenter({ lat: 40, lng: -3 }, 10000, 5000));
+check(
+  Math.abs(trGs.widthM - 10000) < 60 && Math.abs(trGs.heightM - 5000) < 60,
+  `bboxFromCenter keeps ground size (${trGs.widthM.toFixed(0)}x${trGs.heightM.toFixed(0)} m)`
+);
+
+const trRange = tileRangeForBbox(trSmall, zoomForTargetPixels(trSmall, 160));
+check(trRange.nx >= 1 && trRange.ny >= 1, "tile range non-empty");
+
+const trEnc = (e: number): [number, number, number] => {
+  const v = e + 32768;
+  return [
+    Math.floor(v / 256),
+    Math.floor(v % 256),
+    Math.floor((v - Math.floor(v)) * 256),
+  ];
+};
+const [trEr, trEg, trEb] = trEnc(1234.5);
+check(
+  Math.abs(decodeTerrarium(trEr, trEg, trEb) - 1234.5) < 1 / 128,
+  `terrarium decode round trip (${decodeTerrarium(trEr, trEg, trEb)})`
+);
+
+const trRamp = new Float32Array(64);
+for (let i = 0; i < 64; i++) trRamp[i] = i;
+const trResampled = resampleBilinear(trRamp, 8, 8, 0, 0, 8, 8, 4, 4);
+let trMono = true;
+for (let i = 1; i < trResampled.length; i++)
+  if (trResampled[i] < trResampled[i - 1]) trMono = false;
+check(trResampled.length === 16 && trMono, "resample keeps a monotonic ramp");
+
+const trNe = normFromElevations(new Float32Array([0, 50, 100]), 0, 100);
+check(
+  Math.abs(trNe[0]) < 1e-6 &&
+    Math.abs(trNe[1] - 0.5) < 1e-6 &&
+    Math.abs(trNe[2] - 1) < 1e-6,
+  "normFromElevations scales 0..1"
+);
+
+const trGw = 16;
+const trGh = 12;
+const trN = trGw * trGh;
+const trNorm = new Float32Array(trN);
+for (let i = 0; i < trN; i++) trNorm[i] = (i % trGw) / (trGw - 1); // left->right ramp
+const trOpts = {
+  widthMm: 80,
+  reliefMm: 20,
+  baseMm: 2,
+  layerHeight: 0,
+  seaLevelNorm: 0,
+  color: [150, 150, 150] as RGB,
+  bands: 1,
+  bandColors: [] as RGB[],
+  frame: null,
+};
+const terrainSingle = buildTerrainFromHeights(trNorm, trGw, trGh, trOpts);
+check(
+  countNonManifoldEdges(terrainSingle.parts[0].positions) === 0,
+  "terrain single part is manifold"
+);
+check(
+  Math.abs(terrainSingle.bboxMm.z - 22) < 1e-6,
+  `terrain height = base + relief (${terrainSingle.bboxMm.z})`
+);
+check(
+  Math.abs(terrainSingle.bboxMm.x - 80) < 1e-6,
+  `terrain width = 80 mm (${terrainSingle.bboxMm.x})`
+);
+
+const terrainSea = buildTerrainFromHeights(trNorm, trGw, trGh, {
+  ...trOpts,
+  seaLevelNorm: 0.5,
+});
+let trSeaMin = Infinity;
+for (const v of terrainSea.norm) if (v < trSeaMin) trSeaMin = v;
+check(
+  Math.abs(trSeaMin - 0.5) < 1e-6,
+  `sea level raises the floor to 0.5 (${trSeaMin})`
+);
+
+const terrainBanded = buildTerrainFromHeights(trNorm, trGw, trGh, {
+  ...trOpts,
+  bands: 3,
+  bandColors: [
+    [0, 0, 255],
+    [0, 255, 0],
+    [255, 0, 0],
+  ] as RGB[],
+});
+let trBandBad = 0;
+for (const p of terrainBanded.parts) trBandBad += countNonManifoldEdges(p.positions);
+check(
+  terrainBanded.parts.length === 3 && trBandBad === 0,
+  `colour bands nest into 3 manifold parts (${terrainBanded.parts.length}, ${trBandBad} bad)`
+);
+
+const terrainFramed = buildTerrainFromHeights(trNorm, trGw, trGh, {
+  ...trOpts,
+  frame: { widthMm: 4, color: [60, 60, 60] as RGB },
+});
+const trFwCells = Math.max(1, Math.round(4 / (80 / trGw)));
+check(
+  terrainFramed.parts.length === 2,
+  `base plate adds a part (${terrainFramed.parts.length})`
+);
+check(
+  countNonManifoldEdges(terrainFramed.parts[0].positions) === 0,
+  "framed relief is manifold"
+);
+check(
+  countNonManifoldEdges(terrainFramed.parts[1].positions) === 0,
+  "base plate is manifold"
+);
+check(
+  Math.abs(terrainFramed.bboxMm.x - (80 + 2 * trFwCells * (80 / trGw))) < 1e-6,
+  `base plate widens the footprint (${terrainFramed.bboxMm.x})`
+);
+
+// many distinct z values per cell: stresses the windowed cut iteration in
+// emitStrips (a naive all-cuts scan would be O(cells * distinctZ)).
+const tzGw = 40;
+const tzGh = 30;
+const tzNorm = new Float32Array(tzGw * tzGh);
+for (let i = 0; i < tzNorm.length; i++) tzNorm[i] = i / (tzNorm.length - 1);
+const tzTerrain = buildTerrainFromHeights(tzNorm, tzGw, tzGh, {
+  ...trOpts,
+  widthMm: 80,
+  reliefMm: 20,
+});
+check(
+  countNonManifoldEdges(tzTerrain.parts[0].positions) === 0,
+  "many-distinct-z heightfield is manifold"
+);
+check(
+  Math.abs(tzTerrain.bboxMm.z - 22) < 1e-6,
+  `many-distinct-z heightfield height = base + relief (${tzTerrain.bboxMm.z})`
+);
+
+console.log("buildings:");
+check(
+  buildingHeight({ ring: [], heightM: 24 }, 3, 10) === 24,
+  "building height: explicit height tag wins"
+);
+check(
+  buildingHeight({ ring: [], levels: 5 }, 3, 10) === 15,
+  "building height: levels x metresPerLevel"
+);
+check(
+  buildingHeight({ ring: [] }, 3, 10) === 10,
+  "building height: default fallback"
+);
+
+const bctx: BuildingContext = {
+  west: 0,
+  south: 0,
+  east: 0.01,
+  north: 0.01,
+  widthMm: 100,
+  heightMm: 100,
+  metresToMm: 1,
+  heightScale: 1,
+  metresPerLevel: 3,
+  defaultHeightM: 10,
+  groundZ: () => 5,
+};
+const bfootprints: BuildingFootprint[] = [
+  {
+    ring: [
+      [0.002, 0.002],
+      [0.006, 0.002],
+      [0.006, 0.006],
+      [0.002, 0.006],
+    ],
+    heightM: 20,
+  },
+  {
+    ring: [
+      [0.007, 0.007],
+      [0.009, 0.007],
+      [0.009, 0.009],
+    ],
+    levels: 4,
+  },
+];
+const bparts = buildBuildingParts(bfootprints, bctx, [130, 130, 135]);
+check(bparts.length === 1, `buildings build one part (${bparts.length})`);
+check(
+  countNonManifoldEdges(bparts[0].positions) === 0,
+  "buildings part is manifold"
+);
+check(
+  Math.abs(bparts[0].z1 - 25) < 1e-6,
+  `building top = ground + height (${bparts[0].z1})`
+);
+check(
+  Math.abs(bparts[0].z0 - 4.4) < 1e-6,
+  `building base sunk into the ground (${bparts[0].z0})`
+);
+const bdeg = buildBuildingParts(
+  [
+    {
+      ring: [
+        [0, 0],
+        [0.001, 0.001],
+        [0.002, 0.002],
+      ],
+    },
+  ],
+  bctx,
+  [130, 130, 135]
+);
+check(bdeg.length === 0, "degenerate (collinear) footprint is skipped");
+
+console.log("badge / coaster:");
+// badge: shaped plate + raised text from synthetic masks
+const bGw = 64;
+const bGh = 32;
+const badgePlateMask = new Uint8Array(bGw * bGh);
+for (let y = 4; y < bGh - 4; y++)
+  for (let x = 4; x < bGw - 4; x++) badgePlateMask[y * bGw + x] = 1;
+const badgeTextMask = new Uint8Array(bGw * bGh);
+for (let y = 12; y < bGh - 12; y++)
+  for (let x = 16; x < bGw - 16; x++) badgeTextMask[y * bGw + x] = 1;
+const badgeRes = buildBadgeFromMasks(
+  badgePlateMask,
+  badgeTextMask,
+  bGw,
+  bGh,
+  0.5,
+  {
+    plateMm: 3,
+    textMm: 1,
+    plateColor: [0, 0, 255] as RGB,
+    textColor: [255, 255, 255] as RGB,
+  }
+);
+check(
+  badgeRes.parts.length === 2,
+  `badge has plate + text parts (${badgeRes.parts.length})`
+);
+let badgeBad = 0;
+for (const p of badgeRes.parts) badgeBad += countNonManifoldEdges(p.positions);
+check(badgeBad === 0, `badge parts manifold (${badgeBad} bad edges)`);
+check(
+  Math.abs(badgeRes.bboxMm.z - 4) < 1e-6,
+  `badge depth = plate + text (${badgeRes.bboxMm.z})`
+);
+
+// keyring hole placement: shapes whose top is concave (heart) or pointy (star)
+// would otherwise get no hole at all — the disc lands in the notch / point.
+const rGw = 40;
+const rGh = 3;
+const runsMask = new Uint8Array(rGw * rGh);
+for (let x = 2; x <= 9; x++) runsMask[1 * rGw + x] = 1;
+for (let x = 20; x <= 39; x++) runsMask[1 * rGw + x] = 1;
+const rcLeft = runCentre(runsMask, rGw, rGh, 1, 0, 19);
+check(Math.abs(rcLeft - 6) < 1e-6, `runCentre finds the left run (${rcLeft})`);
+const rcWide = runCentre(runsMask, rGw, rGh, 1, 0, 39);
+check(Math.abs(rcWide - 30) < 1e-6, `runCentre picks the widest run (${rcWide})`);
+
+const solidMask = new Uint8Array(60 * 60).fill(1);
+const solidHole = fitHole(solidMask, 60, 60, 30, 20, 8, 1);
+check(
+  Math.round(solidHole[0] - 0.5) === 30 && Math.round(solidHole[1] - 0.5) === 20,
+  `fitHole keeps a position that already fits (${solidHole[0]},${solidHole[1]})`
+);
+
+const hGw = 120;
+const hGh = 80;
+const notchMask = new Uint8Array(hGw * hGh);
+for (let y = 0; y < hGh; y++)
+  for (let x = 0; x < hGw; x++) {
+    const halfW = Math.min(58, 6 + y * 1.8);
+    const gapPx = y < 24 ? (24 - y) * 1.2 : 0; // V notch at the top centre
+    if (Math.abs(x - 60) < halfW && Math.abs(x - 60) >= gapPx)
+      notchMask[y * hGw + x] = 1;
+  }
+const notchDist = chamferToZero(notchMask, hGw, hGh);
+check(
+  notchDist[13 * hGw + 60] === 0,
+  "heart-like top centre has no material (a hole there would vanish)"
+);
+// old behaviour: punch at the top centre (4 mm inset, 5 mm hole @ 0.5 mm/px)
+const naiveMask = notchMask.slice();
+clearCircle(naiveMask, hGw, hGh, 60, 13, 5);
+let naiveRemoved = 0;
+for (let i = 0; i < naiveMask.length; i++) naiveRemoved += notchMask[i] - naiveMask[i];
+// new behaviour: aim at the lobe, then slide down until the disc fits
+const lobeX = runCentre(notchMask, hGw, hGh, 13, 0, 59);
+check(lobeX !== 60, `heart-like hole aims at a lobe, not the notch (x ${lobeX})`);
+const heartHole = fitHole(notchMask, hGw, hGh, lobeX, 13, 5, 1);
+const fittedMask = notchMask.slice();
+clearCircle(fittedMask, hGw, hGh, heartHole[0], heartHole[1], 5);
+let fittedRemoved = 0;
+for (let i = 0; i < fittedMask.length; i++)
+  fittedRemoved += notchMask[i] - fittedMask[i];
+const heartClearance =
+  notchDist[
+    Math.round(heartHole[1] - 0.5) * hGw + Math.round(heartHole[0] - 0.5)
+  ];
+check(
+  naiveRemoved === 0 && fittedRemoved > 60,
+  `heart-like hole removes material (${naiveRemoved} px before -> ${fittedRemoved} px now)`
+);
+check(
+  heartClearance >= 5,
+  `heart-like hole sits fully inside the material (clearance ${heartClearance.toFixed(1)} px)`
+);
+
+
+const cGw = 48;
+const cGh = 48;
+const coasterShapeMask = new Uint8Array(cGw * cGh);
+for (let y = 0; y < cGh; y++)
+  for (let x = 0; x < cGw; x++) {
+    const dx = x - cGw / 2;
+    const dy = y - cGh / 2;
+    if (dx * dx + dy * dy <= (cGw / 2 - 1) ** 2)
+      coasterShapeMask[y * cGw + x] = 1;
+  }
+const coasterGrid = new Uint8Array(cGw * cGh);
+for (let i = 0; i < coasterGrid.length; i++)
+  coasterGrid[i] = i % cGw < cGw / 2 ? 0 : 1;
+const coasterImg = { data: new Uint8ClampedArray(cGw * cGh * 4).fill(200) };
+const coasterOpts = {
+  shape: "circle" as const,
+  sizeMm: 100,
+  baseMm: 3,
+  rimMm: 2,
+  cornerMm: 0,
+  mode: "mosaic" as const,
+  depthMm: 1,
+  resolution: cGw,
+  baseColor: [24, 24, 27] as RGB,
+  palette: [
+    [255, 0, 0],
+    [0, 255, 0],
+  ] as RGB[],
+  reliefInvert: false,
+};
+const coasterRes = buildCoasterFromGrid(
+  coasterGrid,
+  coasterImg,
+  coasterShapeMask,
+  cGw,
+  cGh,
+  2,
+  coasterOpts
+);
+check(
+  coasterRes.parts.length === 3,
+  `mosaic coaster = base + 2 colours (${coasterRes.parts.length})`
+);
+let coasterBad = 0;
+for (const p of coasterRes.parts)
+  coasterBad += countNonManifoldEdges(p.positions);
+check(coasterBad === 0, `mosaic coaster parts manifold (${coasterBad} bad edges)`);
+
+const reliefRes = buildCoasterFromGrid(
+  coasterGrid,
+  coasterImg,
+  coasterShapeMask,
+  cGw,
+  cGh,
+  2,
+  { ...coasterOpts, mode: "relief", palette: [] }
+);
+check(
+  reliefRes.parts.length === 1,
+  `relief coaster is a single part (${reliefRes.parts.length})`
+);
+check(
+  countNonManifoldEdges(reliefRes.parts[0].positions) === 0,
+  "relief coaster is manifold"
+);
+
+// The mesher splits every wall at every distinct z in the part, so a
+// continuous relief (one height per cell) explodes into millions of triangles
+// and freezes the preview. Relief heights must stay snapped to a few steps.
+const noisyImg = { data: new Uint8ClampedArray(cGw * cGh * 4) };
+for (let i = 0; i < cGw * cGh; i++) {
+  const v = (i * 37) % 256; // a different luminance in (almost) every cell
+  noisyImg.data[i * 4] = v;
+  noisyImg.data[i * 4 + 1] = v;
+  noisyImg.data[i * 4 + 2] = v;
+  noisyImg.data[i * 4 + 3] = 255;
+}
+const noisyRelief = buildCoasterFromGrid(
+  coasterGrid,
+  noisyImg,
+  coasterShapeMask,
+  cGw,
+  cGh,
+  2,
+  { ...coasterOpts, mode: "relief", palette: [] }
+);
+const reliefLevels = new Set<number>();
+for (const v of noisyRelief.relief!) reliefLevels.add(Math.round(v * 1e6) / 1e6);
+check(
+  reliefLevels.size <= RELIEF_LEVELS + 2,
+  `relief snaps to few z levels (${reliefLevels.size})`
+);
+const reliefCells = coasterShapeMask.reduce((s, m) => s + m, 0);
+const trisPerCell = noisyRelief.triangleCount / reliefCells;
+check(
+  trisPerCell < 60,
+  `relief mesh stays small (${trisPerCell.toFixed(1)} triangles/cell, was 252 un-snapped)`
+);
+
 console.log("exports:");
 async function main() {
   // 3MF from the mosaic parts
@@ -1694,6 +2149,20 @@ async function main() {
   const m6ps = JSON.parse(await m6Zip.file("Metadata/project_settings.config")!.async("string"));
   check(m6ps.filament_colour.length === 6, "6-color project settings has 6 filament colours");
   check(m6ps.nozzle_diameter.length === 6, "6-color project settings has 6 nozzle diameters");
+
+  // terrain export: terrain + frame parts bundle into one 3MF
+  const terrBlob = await build3MF(terrainFramed.parts);
+  const terrZip = await JSZip.loadAsync(await terrBlob.arrayBuffer());
+  const terrModel = await terrZip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (terrModel.match(/<object /g) || []).length === 2,
+    "terrain 3MF has 2 objects (terrain + frame)"
+  );
+  check(
+    /Terrain/.test(terrModel) && /Base plate/.test(terrModel),
+    "terrain 3MF part names present"
+  );
+
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);

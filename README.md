@@ -1,6 +1,6 @@
 # Image → Multi-Color 3D Print
 
-A small Next.js web app with two tools that both export slicer-ready, multi-part 3MF / STL:
+A small Next.js web app with five tools that all export slicer-ready, multi-part 3MF / STL:
 
 - **Image → 3D** (`/`) — turns any uploaded image into a **3D-printable plate**
   (default **5 mm thick**): a flat multi-color mosaic (2–16 filaments), a
@@ -9,8 +9,18 @@ A small Next.js web app with two tools that both export slicer-ready, multi-part
 - **Text → 3D** (`/text`) — turns a line of text into a freestanding
   **two-colour name sign**: a background-colour rim with a raised
   foreground-colour inner section.
+- **Badge → 3D** (`/badge`) — a shaped **name badge / keychain**: raised text on
+  a plate with an optional keyring hole.
+- **Coaster → 3D** (`/coaster`) — an image on a round / hex / octagon / square
+  **coaster** with a raised rim (flat multi-colour mosaic or a single-filament
+  relief).
+- **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
+  a map** into a solid **3D terrain tile** with a variable-height relief, an
+  optional coloured base plate and optional elevation colour bands.
 
-Everything runs **client-side in the browser**: no server, no uploads.
+Everything runs **client-side in the browser**: no server and no image uploads.
+Terrain is the only tool that touches the network — it fetches map and elevation
+tiles for the location you choose (nothing else leaves your device).
 
 ## How it works
 
@@ -165,6 +175,119 @@ counter-clockwise, holes clockwise — so wall normals point out of the
 material, and cap/wall edges are shared, keeping the parts manifold for the
 slicer.
 
+## Badge → 3D keychain (`/badge`)
+
+A shaped **name badge / keychain**: raised text on a plate, with an optional
+keyring hole. Two colours (plate + raised text), exported as one 3MF or an STL
+zip.
+
+- **Shape** — rounded rectangle, rectangle, circle, dog tag, hexagon, heart or
+  star.
+- **Text** — up to a few lines (Enter for a new line), any built-in font or an
+  uploaded TTF/OTF, bold / italic. The font is auto-fitted inside the shape's
+  margin, with a size multiplier.
+- **Keyring hole** — a punched hole (diameter + a gap from the shape's edge). It
+  sits at the top centre — except on a wide **dog tag**, where it moves to the
+  left end and the text shifts right to clear it. On shapes whose top is concave
+  or pointy (**heart**, **star**) the hole is placed at the highest spot inside
+  the material where it fits, so it never lands in the notch or the point.
+
+Both parts are extruded on a **fine pixel grid** (0.12 mm) with the shared
+manifold heightfield mesher, so the stepped edges stay below the nozzle size and
+slicers never ask to repair the mesh. Print the plate in the plate colour and
+swap (or use a second extruder) for the raised text.
+
+## Coaster → 3D (`/coaster`)
+
+An uploaded image becomes a **coaster** with a raised rim. Two modes:
+
+- **Mosaic** (multi-colour) — a solid shaped base in the rim colour, with the
+  quantized image raised on top inside the rim (one extruder per colour). The
+  palette is auto-detected and editable.
+- **Relief** (single filament) — a raised rim with the image engraved in the
+  well (bright = high, or invert it). The engraved heights snap to a limited
+  number of steps, like the terrain's layer snapping: the heightfield mesher
+  splits every wall at every distinct height in the part, so a continuous
+  per-pixel relief balloons into millions of triangles and stalls the preview.
+
+- **Shape** — circle, hexagon, octagon, rounded square or square.
+- **Controls** — size (width), base thickness, rim width, colour height / relief
+  depth, resolution (up to 400 px, so the shaped edge stays below the nozzle),
+  and — for mosaic — the number of colours.
+
+Like the badge, every part is manifold. Export as one 3MF (base + one part per
+colour) or an STL zip.
+
+## Terrain → 3D (`/terrain`) — experimental, may not work as expected
+
+> **Experimental:** this tool may not work as expected. It depends on
+> third-party network services (map tiles, elevation tiles, geocoding,
+> building footprints) that can be slow or unavailable.
+
+The third page turns elevation into a solid, printable tile. Two sources feed the
+same geometry:
+
+- **Upload heightmap** — any PNG / JPG / WebP; brightness becomes height (dark
+  low, bright high, or invert it). *Auto-level* stretches the map to its real
+  min/max.
+- **Pick from map** — a Leaflet map (OpenStreetMap) with a selection box. The map
+  **defaults to your current location** (browser geolocation, once) and has a
+  **search box** (Nominatim geocoding) plus a "use my location" button to jump
+  anywhere; clicking the map moves the box. The real elevation for the selected
+  area is downloaded from the **AWS Open Data "Terrain Tiles"** dataset
+  (`terrarium` PNGs — keyless and CORS-enabled, so it runs in the browser). The
+  size sliders set the area in metres.
+
+**How it is built** — the image is downscaled to the print grid; every cell is a
+column from z = 0 (a solid base) up to `base + elevation`, snapped to whole
+print layers. The mesh is the shared manifold heightfield (`lib/mesh.ts`), so
+there are no non-manifold edges and slicers never offer to repair it. The
+**live preview is meshed at a capped resolution** (128 px) and the
+**full-resolution model is only built when you download**, so dragging sliders
+stays smooth while exports keep every detail.
+
+| Control | Range | Meaning |
+| --- | --- | --- |
+| Resolution | 40–320 px | grid across the longer ground side (export size; the live preview is capped at 128 px) |
+| Print width | 40–300 mm | printed width; height follows the selection's aspect |
+| Max relief height | 2–80 mm | crest height above the base |
+| Base thickness | 0.5–6 mm | solid base under the relief |
+| Print layer height | 0.08–0.3 mm | relief steps snap to whole layers (slice with the same height). Also keeps the mesh small and the preview fast |
+| Sea level | 0–90 % | flatten everything below this to a "water" plane |
+| Invert / Auto-level | toggles | upload source only |
+| Colour bands | 1–6 | 1 = single colour; >1 steps the relief into flat colour plateaus, one extruder per band |
+| Base plate | toggle | a solid plate of the base thickness extends `border width` beyond the relief; the relief is built on top of it |
+| OSM buildings | toggle | fetch real building footprints (Overpass) and extrude them onto the terrain as a coloured part; metres-per-level, height multiplier and colour |
+
+Exports the same **3MF / STL zip** as the other tools (see *Export* above).
+
+**OpenStreetMap buildings** — with the toggle on, the tool queries the Overpass
+API for the building footprints in the selected area and extrudes each into a
+simple prism that sits on the terrain surface (flat base at the lowest ground
+under the footprint, so it never floats). Heights come from the `height` tag, or
+are estimated from `building:levels` × the metres-per-level setting (many OSM
+buildings have no height, so treat them as approximate). It's a separate
+coloured part, so it prints on its own extruder; the footprint count is capped
+(zoom in for large areas).
+
+**Vertical exaggeration** is shown for map terrain — the printed relief compared
+with the ground's true scale (e.g. `1.8×`) — so it is obvious the model is not to
+scale.
+
+**Attribution** — map tiles © OpenStreetMap contributors; place search via
+Nominatim (© OpenStreetMap contributors); building footprints via the Overpass
+API (© OpenStreetMap contributors, ODbL); elevation from Mapzen / AWS Terrain
+Tiles (SRTM, 3DEP and others). Attribution is required and is shown on the page.
+Tiles are fetched only for the selected area (no prefetching), per the
+OpenStreetMap tile usage policy.
+
+**Privacy** — unlike the image and text tools, the terrain tool talks to the
+network: it fetches map tiles from OpenStreetMap, elevation from AWS, building
+footprints from Overpass, and — when you use the search box — the place-name
+query from Nominatim. Your browser's location is requested once, only to centre
+the map (and only if you allow it).
+
+
 ## Run it
 
 ```bash
@@ -202,16 +325,23 @@ class of bug this check exists to catch. The slider text-entry rules are
 covered too: a typed value is clamped to the slider's range, snapped to its
 own step grid (the maximum stays reachable), and the display → parse round
 trip is exercised for every value on every slider, so editing one field can
-never silently move a setting.
+never silently move a setting. The terrain tool is covered as well: Web-Mercator
+round trips, tile-range / zoom selection, terrarium encode ↔ decode, bilinear
+resampling, and manifold terrain meshes (single colour, sea level, stepped colour
+bands and the base plate). The badge and coaster builders are checked too: their
+parts must come out manifold (plate + raised text; base + one part per colour;
+and the single-filament relief coaster).
 
 ## Project layout
 
 ```
-app/               Next.js app router pages (/ image tool, /text sign tool),
-                   layout, styles
+app/               Next.js app router pages (/ image tool, /text sign tool,
+                   /terrain tool), layout, styles
 components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D,
-                   TextControls (text sign controls), PreviewGeneric (shared
-                   multi-part 3D viewer)
+                   TextControls (text sign controls), BadgeControls,
+                   CoasterControls, TerrainControls (terrain controls),
+                   MapPicker (Leaflet location picker), ToolNav (shared tabs),
+                   PreviewGeneric (shared multi-part 3D viewer)
 lib/quantize.ts    median cut + farthest-point seeded k-means, pixel mapping
 lib/mesh.ts        pixel grid → merged rects → extruded box triangles
                    (arbitrary z0..z1 bands for layered mode)
@@ -226,6 +356,16 @@ lib/pipeline.ts    downscale + orchestration glue
 lib/shapes.ts      shape outlines (unit-space polygons), silhouette, classifier
 lib/slider.ts      slider text entry: parse, format, clamp and step-snap rules
 lib/curve.ts       plate bend around a vertical axis (flat → full cylinder)
+lib/terrain.ts     heightmap / map elevation → solid terrain (base, sea level,
+                   stepped colour bands, base plate)
+lib/terrainTiles.ts  AWS/Mapzen terrarium tile fetch + decode + resample
+lib/geo.ts         Web-Mercator tile math (bbox ↔ tiles, zoom, ground size)
+lib/geocode.ts     place-name search via OpenStreetMap Nominatim
+lib/bounds.ts      bounding box + centre of triangle-soup parts
+lib/masks.ts       canvas shape masks (badge/coaster) + erode / hole ops
+lib/badge.ts       badge geometry: shaped plate + raised text + keyring hole
+lib/coaster.ts     coaster geometry: shaped base + mosaic colours / relief
+lib/buildings.ts   OSM building footprints (Overpass) → extruded prisms
 scripts/           core-logic test
 ```
 

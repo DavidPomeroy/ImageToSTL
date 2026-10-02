@@ -1,6 +1,8 @@
 "use client";
 
 import { hexToRgb, rgbToHex, type RGB } from "@/lib/quantize";
+import { formatSliderValue, resolveSliderCommit } from "@/lib/slider";
+import { useRef, useState } from "react";
 
 export interface TextFontOption {
   label: string;
@@ -44,13 +46,73 @@ export function Slider(props: {
   unit: string;
   onChange: (v: number) => void;
 }) {
+  // The readout doubles as a text field. While typing, a local draft keeps
+  // partial input ("0." or a lone "-") alive; blur / Enter commits it — the
+  // entry is clamped to the range and snapped to the slider's step — while Esc
+  // (or an entry with no number in it) reverts to the current value.
+  const [draft, setDraft] = useState<string | null>(null);
+  // First click into the field selects the whole value so typing replaces it;
+  // a later click places the caret for fine editing.
+  const freshClick = useRef(true);
+  const cancelled = useRef(false);
+  const text = draft ?? formatSliderValue(props.value, props.step);
+
+  const commit = (raw: string) => {
+    const wasCancelled = cancelled.current;
+    cancelled.current = false;
+    setDraft(null);
+    const next = resolveSliderCommit(
+      raw,
+      props.value,
+      props.min,
+      props.max,
+      props.step,
+      wasCancelled
+    );
+    if (next !== null) props.onChange(next);
+  };
+
   return (
     <label className="block">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <span className="text-sm text-zinc-300">{props.label}</span>
-        <span className="text-sm tabular-nums text-zinc-400">
-          {props.value}
-          {props.unit}
+        <span className="flex items-baseline">
+          <input
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={`${props.label} value`}
+            title="Type a value, or drag the slider"
+            value={text}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onMouseUp={(e) => {
+              if (freshClick.current) {
+                e.currentTarget.select();
+                freshClick.current = false;
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.currentTarget.blur(); // blur commits
+              } else if (e.key === "Escape") {
+                cancelled.current = true;
+                setDraft(null);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e) => {
+              freshClick.current = true;
+              commit(e.currentTarget.value);
+            }}
+            className="w-16 rounded border border-transparent bg-transparent px-1 py-0.5 text-right text-sm tabular-nums text-zinc-400 transition-colors hover:border-zinc-700 focus:border-emerald-500/50 focus:bg-zinc-950 focus:text-zinc-200 focus:outline-none"
+          />
+          {props.unit !== "" && (
+            <span className="whitespace-pre text-sm tabular-nums text-zinc-400">
+              {props.unit}
+            </span>
+          )}
         </span>
       </div>
       <input
@@ -60,7 +122,10 @@ export function Slider(props: {
         max={props.max}
         step={props.step}
         value={props.value}
-        onChange={(e) => props.onChange(Number(e.target.value))}
+        onChange={(e) => {
+          setDraft(null);
+          props.onChange(Number(e.target.value));
+        }}
         className="w-full accent-emerald-500"
       />
     </label>

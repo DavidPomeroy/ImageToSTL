@@ -179,7 +179,7 @@ for (const k of [2, 5, 8]) {
   const pK = autoPalette(collectPixels(data), k);
   check(pK.length === k, `autoPalette returns ${k} colors for k=${k} (got ${pK.length})`);
   const mosaicK = processImageData(quadImage, pK, 40, 5, "mosaic");
-  check(mosaicK.meshes.length === k, `mosaic ${k}-color: ${k} parts`);
+  check(mosaicK.meshes.length === k + 1, `mosaic ${k}-color: ${k} skins + base`);
   for (const m of mosaicK.meshes) {
     const bad = countNonManifoldEdges(m.positions);
     check(bad === 0, `mosaic ${k}-color ${m.name}: manifold (${bad} bad edges)`);
@@ -192,10 +192,15 @@ check(emptyPal8.length === 8, `autoPalette fallback on empty pixels produces 8 c
 
 console.log("mosaic mode:");
 const mosaic = processImageData(quadImage, palette, 40, 5, "mosaic");
-check(mosaic.meshes.length === 4, "mosaic: 4 parts");
+check(mosaic.meshes.length === 5, "mosaic: 4 skins + base");
 check(
-  mosaic.meshes.map((m) => m.pixelCount).join(",") === "16,15,16,16",
-  `mosaic per-color coverage 16,15,16,16 (got ${mosaic.meshes.map((m) => m.pixelCount).join(",")})`
+  mosaic.meshes.map((m) => m.pixelCount).join(",") === "16,15,16,16,63",
+  `mosaic per-color coverage 16,15,16,16 + base 63 (got ${mosaic.meshes.map((m) => m.pixelCount).join(",")})`
+);
+check(
+  Math.abs((mosaic.mosaic?.baseTopMm ?? 0) - 4.2) < 1e-6 &&
+    Math.abs((mosaic.mosaic?.topMm ?? 0) - 0.8) < 1e-6,
+  `mosaic base 4.2mm + skin 0.8mm (got ${mosaic.mosaic?.baseTopMm} + ${mosaic.mosaic?.topMm})`
 );
 for (const m of mosaic.meshes) {
   check(m.positions.length > 0 && m.positions.length % 9 === 0, `${m.name}: positions valid`);
@@ -203,8 +208,147 @@ for (const m of mosaic.meshes) {
   check(bad === 0, `${m.name}: manifold (${bad} bad edges)`);
   const zs = m.positions.filter((_, i) => i % 3 === 2);
   check(
-    zs.every((z) => Math.abs(z) < 1e-6 || Math.abs(z - 5) < 1e-6),
-    `${m.name}: all z at 0 or 5`
+    zs.every((z) => z >= m.z0 - 1e-6 && z <= m.z1 + 1e-6),
+    `${m.name}: z within [${m.z0.toFixed(1)}, ${m.z1.toFixed(1)}]`
+  );
+}
+// Custom top thickness + base color.
+{
+  const custom = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    undefined,
+    0,
+    { topMm: 1.2, baseColor: [10, 10, 10] }
+  );
+  check(
+    Math.abs((custom.mosaic?.baseTopMm ?? 0) - 3.8) < 1e-6 &&
+      Math.abs((custom.mosaic?.topMm ?? 0) - 1.2) < 1e-6,
+    `mosaic custom skin 1.2mm (got base ${custom.mosaic?.baseTopMm} + skin ${custom.mosaic?.topMm})`
+  );
+  check(
+    custom.meshes.length === 5 &&
+      custom.meshes[4].color.join(",") === "10,10,10",
+    `mosaic custom base color (got ${custom.meshes[4]?.color.join(",")})`
+  );
+  for (const m of custom.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `mosaic custom ${m.name}: manifold (${bad} bad edges)`);
+  }
+}
+// Skin == full thickness: no base slab, full-height color columns.
+{
+  const fullSkin = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    undefined,
+    0,
+    { topMm: 5 }
+  );
+  check(
+    fullSkin.meshes.length === 4,
+    `mosaic full-height skin: no base part (${fullSkin.meshes.length} parts)`
+  );
+  check(
+    fullSkin.mosaic?.hasBase === false,
+    `mosaic full-height skin: hasBase=false (got ${fullSkin.mosaic?.hasBase})`
+  );
+  // Border with no base falls back to Filament 1 (no base-color overlay), so
+  // the mask is not exposed and the border pixels print as index 0.
+  check(
+    fullSkin.border === undefined,
+    `mosaic full-height skin: no base-color border overlay (got ${fullSkin.border ? "some" : "none"})`
+  );
+  const noBaseBorder = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    { borderMm: 3 },
+    0,
+    { topMm: 5 }
+  );
+  check(
+    noBaseBorder.border === undefined,
+    "mosaic full-height skin: border has no base-color overlay with a border width"
+  );
+  {
+    // The full-rectangle border ring classified at pixel level: every ring
+    // pixel must be forced to Filament 1 (index 0) in the preview grid.
+    const ringCls = classifyPixels(
+      8,
+      8,
+      { type: "rectangle", cx: 0.5, cy: 0.5, size: 1 },
+      3 / (40 / 8)
+    );
+    if (ringCls) {
+      const forcedToFilament1 = [...noBaseBorder.grid].every(
+        (g, i) => ringCls[i] !== 1 || g === 0
+      );
+      check(
+        forcedToFilament1,
+        "mosaic full-height skin: border pixels print as Filament 1"
+      );
+    }
+  }
+  check(
+    Math.abs((fullSkin.mosaic?.baseTopMm ?? -1) - 0) < 1e-6 &&
+      Math.abs((fullSkin.mosaic?.topMm ?? 0) - 5) < 1e-6,
+    `mosaic full-height skin: 0 + 5mm (got ${fullSkin.mosaic?.baseTopMm} + ${fullSkin.mosaic?.topMm})`
+  );
+  for (const m of fullSkin.meshes) {
+    const bad = countNonManifoldEdges(m.positions);
+    check(bad === 0, `mosaic full-height ${m.name}: manifold (${bad} bad edges)`);
+    const zs = m.positions.filter((_, i) => i % 3 === 2);
+    check(
+      zs.every((z) => z >= -1e-6 && z <= 5 + 1e-6),
+      `mosaic full-height ${m.name}: full 0..5 height`
+    );
+  }
+}
+// Skin thicker than the plate clamps to the full height.
+{
+  const clamped = processImageData(
+    quadImage,
+    palette,
+    40,
+    5,
+    "mosaic",
+    0.2,
+    0.8,
+    undefined,
+    false,
+    undefined,
+    0,
+    { topMm: 9 }
+  );
+  check(
+    clamped.mosaic?.hasBase === false &&
+      Math.abs((clamped.mosaic?.topMm ?? 0) - 5) < 1e-6,
+    `mosaic skin > depth clamps to full height (got ${clamped.mosaic?.topMm})`
+  );
+  check(
+    Math.abs(clamped.depthMm - 5) < 1e-6,
+    `mosaic skin > depth keeps depth 5 (got ${clamped.depthMm})`
   );
 }
 
@@ -635,15 +779,73 @@ check(
   `circle mask removes pixels (${shapedMosaic.filledPixels}/63 filled)`
 );
 {
-  // every non-empty pixel is inside or border; border pixels are Filament 1
+  // every non-empty pixel is inside or border; mosaic border prints in base
   let borderPxCount = 0;
   for (let i = 0; i < shapedMosaic.grid.length; i++) {
     if (shapedMosaic.grid[i] !== EMPTY && cls![i] === 1) borderPxCount++;
   }
-  check(borderPxCount > 0, "mosaic: border pixels assigned to Filament 1");
+  check(borderPxCount > 0, "mosaic: border pixels present");
+  check(
+    !!shapedMosaic.border && shapedMosaic.border.mask.some((m) => m === 1),
+    "mosaic: border mask exposed for the base-color preview"
+  );
+  check(
+    (shapedMosaic.border?.color ?? []).join(",") ===
+      shapedMosaic.meshes[shapedMosaic.meshes.length - 1].color.join(","),
+    "mosaic: border color matches the base part"
+  );
   for (const m of shapedMosaic.meshes) {
     const bad = countNonManifoldEdges(m.positions);
     check(bad === 0, `shaped mosaic ${m.name}: manifold (${bad} bad edges)`);
+  }
+}
+
+// border on Full (no shape): the frame around the image edges must change
+// the mesh in every mode (regression: the border silently did nothing when
+// shape was undefined because no fine grid was built).
+{
+  for (const mode of ["mosaic", "layered", "lithophane", "cmyk"] as const) {
+    const noBorder = processImageData(
+      quadImage,
+      palette,
+      40,
+      5,
+      mode,
+      0.2,
+      0.8,
+      { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 },
+      false,
+      { borderMm: 0 },
+      0,
+      mode === "mosaic" ? { topMm: 0.8 } : undefined
+    );
+    const withBorder = processImageData(
+      quadImage,
+      palette,
+      40,
+      5,
+      mode,
+      0.2,
+      0.8,
+      { colorLayers: 4, whiteMinLayers: 2, whiteMaxLayers: 10 },
+      false,
+      { borderMm: 3 },
+      0,
+      mode === "mosaic" ? { topMm: 0.8 } : undefined
+    );
+    const differs = noBorder.meshes.some(
+      (m, i) => m.positions.length !== withBorder.meshes[i].positions.length
+    );
+    check(differs, `${mode}: border on Full changes the mesh`);
+    for (const m of withBorder.meshes) {
+      // Holes are the real defect (open boundary); 4-way diagonal "saddles"
+      // are tolerated point contacts, same as the adversarial sweep below.
+      const { holes, bad } = analyzeEdges(m.positions);
+      check(
+        holes === 0 && bad === 0,
+        `Full+border ${mode} ${m.name}: no holes/broken topology (holes=${holes} bad=${bad})`
+      );
+    }
   }
 }
 
@@ -1214,8 +1416,12 @@ console.log("border ring (fine cells, smooth inner edge):");
     let uncovered = 0; // union gaps: real holes in the combined plate
     let wrongRing = 0; // ring band not owned by the mode's border part(s)
     let wrongRingZ = 0; // lithophane: ring band not at max thickness
-    let wrongInterior = 0; // mosaic: interior cell claimed by more than one part
-    const ringOwnerMask = mode === "cmyk" ? 0b1111 : 1;
+    let wrongInterior = 0; // mosaic: interior cell not covered by base + exactly one skin
+    // Mosaic is stacked: the last part is the base slab, parts 0..N-1 are skins.
+    // The base owns the full-height border ring; skins own no ring.
+    const mosaicBaseBit = mode === "mosaic" ? 1 << (proc.meshes.length - 1) : 0;
+    const ringOwnerMask =
+      mode === "cmyk" ? 0b1111 : mode === "mosaic" ? mosaicBaseBit : 1;
     for (let fy = 0; fy < fh; fy++) {
       for (let fx = 0; fx < fw; fx++) {
         const i = fy * fw + fx;
@@ -1236,12 +1442,21 @@ console.log("border ring (fine cells, smooth inner edge):");
           continue;
         }
         if (isRing) {
-          if (mask !== ringOwnerMask) wrongRing++;
+          if (mode === "mosaic") {
+            // Ring band: base slab only (full height, base color).
+            if (mask !== ringOwnerMask) wrongRing++;
+          } else {
+            if (mask !== ringOwnerMask) wrongRing++;
+          }
           if (mode === "lithophane" && Math.abs(topZ[i] - 5) > 1e-6) {
             wrongRingZ++;
           }
-        } else if (mode === "mosaic" && (mask & (mask - 1)) !== 0) {
-          wrongInterior++;
+        } else if (mode === "mosaic") {
+          // Interior: base bit + exactly one skin bit.
+          const skins = mask & ~mosaicBaseBit;
+          if (!(mask & mosaicBaseBit) || (skins & (skins - 1)) !== 0 || skins === 0) {
+            wrongInterior++;
+          }
         }
       }
     }
@@ -1262,7 +1477,7 @@ console.log("border ring (fine cells, smooth inner edge):");
     if (mode === "mosaic") {
       check(
         wrongInterior === 0,
-        `mosaic: interior cells belong to exactly one colour part (${wrongInterior} wrong cells)`
+        `mosaic: interior cells covered by base + exactly one skin (${wrongInterior} wrong cells)`
       );
     }
 
@@ -2052,19 +2267,19 @@ async function main() {
   check(names.includes("_rels/.rels"), "3MF contains _rels/.rels");
   check(names.includes("3D/3dmodel.model"), "3MF contains 3D/3dmodel.model");
   const model = await zip.file("3D/3dmodel.model")!.async("string");
-  check((model.match(/<object /g) || []).length === 4, "3MF has 4 objects");
-  check((model.match(/<item /g) || []).length === 4, "3MF build has 4 items");
+  check((model.match(/<object /g) || []).length === 5, "3MF has 5 objects (4 skins + base)");
+  check((model.match(/<item /g) || []).length === 5, "3MF build has 5 items");
   check(
     (model.match(/<m:colorgroup /g) || []).length === 1,
     "3MF has 1 colorgroup"
   );
   check(
-    (model.match(/<m:color /g) || []).length === 4,
-    "3MF colorgroup has 4 colors"
+    (model.match(/<m:color /g) || []).length === 5,
+    "3MF colorgroup has 5 colors"
   );
   check(
-    (model.match(/pid="1" pindex=/g) || []).length === 4,
-    "all 4 objects reference the colorgroup"
+    (model.match(/pid="1" pindex=/g) || []).length === 5,
+    "all 5 objects reference the colorgroup"
   );
   const triCount = (model.match(/<triangle /g) || []).length;
   const coloredTris = (model.match(/pid="1" p1="\d+"\/>/g) || []).length;
@@ -2085,8 +2300,8 @@ async function main() {
     "3MF contains Metadata/project_settings.config"
   );
   const ms = await zip.file("Metadata/model_settings.config")!.async("string");
-  check((ms.match(/<object /g) || []).length === 4, "model_settings has 4 objects");
-  for (let e = 1; e <= 4; e++) {
+  check((ms.match(/<object /g) || []).length === 5, "model_settings has 5 objects");
+  for (let e = 1; e <= 5; e++) {
     check(
       ms.includes(`key="extruder" value="${e}"`),
       `model_settings assigns extruder ${e}`
@@ -2096,18 +2311,18 @@ async function main() {
     await zip.file("Metadata/project_settings.config")!.async("string")
   );
   check(
-    Array.isArray(ps.filament_colour) && ps.filament_colour.length === 4,
-    "project settings: 4 filament colours"
+    Array.isArray(ps.filament_colour) && ps.filament_colour.length === 5,
+    "project settings: 5 filament colours"
   );
   check(
     Array.isArray(ps.nozzle_diameter) &&
-      ps.nozzle_diameter.length === 4 &&
+      ps.nozzle_diameter.length === 5 &&
       ps.nozzle_diameter.every((d: string) => d === "0.4"),
-    "nozzle_diameter: 4 entries (Bambu config validity check)"
+    "nozzle_diameter: 5 entries (Bambu config validity check)"
   );
   check(
-    Array.isArray(ps.extruder_type) && ps.extruder_type.length === 4,
-    "extruder_type: 4 entries matching nozzle_diameter size"
+    Array.isArray(ps.extruder_type) && ps.extruder_type.length === 5,
+    "extruder_type: 5 entries matching nozzle_diameter size"
   );
 
   // lithophane 3MF = single part
@@ -2145,39 +2360,39 @@ async function main() {
   );
   check(new DataView(stl).getUint32(80, true) === tris, "STL triangle count header");
 
-  // STL zip with one file per color
+  // STL zip with one file per part (skins + base)
   const zipBlob = await buildSTLZip(parts);
   const szip = await JSZip.loadAsync(await zipBlob.arrayBuffer());
   check(
-    Object.keys(szip.files).filter((n) => n.endsWith(".stl")).length === 4,
-    "STL zip contains 4 files"
+    Object.keys(szip.files).filter((n) => n.endsWith(".stl")).length === 5,
+    "STL zip contains 5 files"
   );
 
   // variable count 3MF export (e.g. 6-part export)
   const p6 = autoPalette(collectPixels(data), 6);
   const mosaic6 = processImageData(quadImage, p6, 40, 5, "mosaic");
   const p6Parts = meshPartPositions(mosaic6);
-  check(p6Parts.length === 6, "6-part positions length is 6");
+  check(p6Parts.length === 7, "6-color positions length is 7 (6 skins + base)");
   const m6Blob = await build3MF(p6Parts);
   const m6Zip = await JSZip.loadAsync(await m6Blob.arrayBuffer());
   const m6Model = await m6Zip.file("3D/3dmodel.model")!.async("string");
   check(
-    (m6Model.match(/<object /g) || []).length === 6,
-    "6-color 3MF has 6 objects"
+    (m6Model.match(/<object /g) || []).length === 7,
+    "6-color 3MF has 7 objects"
   );
   check(
-    (m6Model.match(/<m:color /g) || []).length === 6,
-    "6-color 3MF colorgroup has 6 colors"
+    (m6Model.match(/<m:color /g) || []).length === 7,
+    "6-color 3MF colorgroup has 7 colors"
   );
   check(
-    m6Model.includes("<metadata name=\"Title\">6-color image print</metadata>"),
-    "6-color 3MF metadata title is 6-color"
+    m6Model.includes("<metadata name=\"Title\">7-color image print</metadata>"),
+    "7-part 3MF metadata title is 7-color"
   );
   const m6ms = await m6Zip.file("Metadata/model_settings.config")!.async("string");
-  check((m6ms.match(/<object /g) || []).length === 6, "6-color model_settings has 6 objects");
+  check((m6ms.match(/<object /g) || []).length === 7, "7-part model_settings has 7 objects");
   const m6ps = JSON.parse(await m6Zip.file("Metadata/project_settings.config")!.async("string"));
-  check(m6ps.filament_colour.length === 6, "6-color project settings has 6 filament colours");
-  check(m6ps.nozzle_diameter.length === 6, "6-color project settings has 6 nozzle diameters");
+  check(m6ps.filament_colour.length === 7, "7-part project settings has 7 filament colours");
+  check(m6ps.nozzle_diameter.length === 7, "7-part project settings has 7 nozzle diameters");
 
   // terrain export: terrain + frame parts bundle into one 3MF
   const terrBlob = await build3MF(terrainFramed.parts);

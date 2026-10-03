@@ -1,6 +1,7 @@
 "use client";
 
 import type { PrintMode } from "@/lib/pipeline";
+import { hexToRgb, rgbToHex, type RGB } from "@/lib/quantize";
 import {
   SHAPE_CATEGORIES,
   shapeCategoryOf,
@@ -189,6 +190,8 @@ export default function Controls(props: {
   colorLayers: number;
   whiteMinLayers: number;
   whiteMaxLayers: number;
+  mosaicTopMm: number;
+  mosaicBaseColor: RGB;
   smooth: boolean;
   shapeType: ShapeType;
   shapeSize: number;
@@ -206,6 +209,8 @@ export default function Controls(props: {
   onColorLayers: (v: number) => void;
   onWhiteMinLayers: (v: number) => void;
   onWhiteMaxLayers: (v: number) => void;
+  onMosaicTopMm: (v: number) => void;
+  onMosaicBaseColor: (c: RGB) => void;
   onSmooth: (v: boolean) => void;
   onShapeType: (t: ShapeType) => void;
   onShapeSize: (v: number) => void;
@@ -217,6 +222,7 @@ export default function Controls(props: {
   const layered = props.mode === "layered";
   const litho = props.mode === "lithophane";
   const cmyk = props.mode === "cmyk";
+  const mosaic = props.mode === "mosaic";
   const paletteMode = props.mode === "mosaic" || props.mode === "layered";
   return (
     <div className="space-y-4">
@@ -362,11 +368,15 @@ export default function Controls(props: {
       />
       {props.borderMm > 0 && (
         <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
-          {layered || litho
+          {layered
             ? "Border prints in Filament 1."
             : cmyk
               ? "Border prints solid dark (full CMY + max white)."
-              : "Border prints at maximum thickness (darkest backlit)."}
+              : mosaic
+                ? props.mosaicTopMm < props.depthMm - 1e-9
+                  ? "Border prints in the base color."
+                  : "Border prints in Filament 1 (no base slab)."
+                : "Border prints at maximum thickness (darkest backlit)."}
         </p>
       )}
       <Slider
@@ -424,6 +434,63 @@ export default function Controls(props: {
         />
       )}
 
+      {mosaic && (
+        <>
+          <Slider
+            label="Top color thickness"
+            value={props.mosaicTopMm}
+            min={0.2}
+            max={props.depthMm}
+            step={0.2}
+            unit=" mm"
+            onChange={props.onMosaicTopMm}
+          />
+          {props.mosaicTopMm < props.depthMm - 1e-9 ? (
+            <>
+              <div className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+                <label
+                  className="relative h-9 w-9 shrink-0 cursor-pointer overflow-hidden rounded-md border border-zinc-600"
+                  title="Click to change the base color"
+                >
+                  <span
+                    className="pointer-events-none absolute inset-0"
+                    style={{ backgroundColor: rgbToHex(props.mosaicBaseColor) }}
+                  />
+                  <input
+                    type="color"
+                    value={rgbToHex(props.mosaicBaseColor)}
+                    onChange={(e) => props.onMosaicBaseColor(hexToRgb(e.target.value))}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </label>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-medium text-zinc-200">
+                      Base color
+                    </span>
+                    <span className="font-mono text-xs uppercase text-zinc-500">
+                      {rgbToHex(props.mosaicBaseColor)}
+                    </span>
+                  </div>
+                  <div className="text-xs tabular-nums text-zinc-500">
+                    Solid slab under the color skin
+                  </div>
+                </div>
+              </div>
+              <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
+                The plate prints as a solid base in this color with a thin color
+                skin on top — snapping to whole print layers.
+              </p>
+            </>
+          ) : (
+            <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
+              The color skin covers the full thickness — full-height color
+              columns, no base slab.
+            </p>
+          )}
+        </>
+      )}
+
       {cmyk && (
         <>
           <Slider
@@ -456,7 +523,7 @@ export default function Controls(props: {
         </>
       )}
 
-      {(layered || litho || cmyk) && (
+      {(layered || litho || cmyk || mosaic) && (
         <>
           <Slider
             label="Print layer height"
@@ -472,7 +539,9 @@ export default function Controls(props: {
               ? "All color and white steps are whole print layers — slice with this layer height."
               : litho
                 ? "Thickness steps snap to whole print layers — slice with this layer height for clean level changes."
-                : "Band boundaries snap to whole print layers — slice with the same layer height you set here."}
+                : mosaic
+                  ? "Total height and the top color skin snap to whole print layers — slice with the same layer height you set here."
+                  : "Band boundaries snap to whole print layers — slice with the same layer height you set here."}
           </p>
         </>
       )}

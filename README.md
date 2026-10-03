@@ -52,9 +52,14 @@ tiles for the location you choose (nothing else leaves your device).
 
 ## Print modes
 
-**Mosaic (flat, uniform thickness)** — each color region is a solid prism the
-full plate thickness, side by side in the XY plane. Multi-material print
-(2–16 filaments, e.g. AMS / MMU).
+**Mosaic (flat plate, base + thin color skin)** — the plate prints as a solid
+base slab in its own filament color with a thin per-color skin on top (side by
+side in the XY plane). The *Top color thickness* slider sets the skin height
+(default 0.8 mm, snapped to whole print layers); the base takes the remaining
+height. The top thickness can never exceed the plate thickness; set it equal
+to the plate thickness and the skin covers the full height — full-height color
+columns with no base slab (one fewer filament). Multi-material print (2–16
+colors plus the base, e.g. AMS / MMU).
 
 **Layered (HueForge-style relief)** — the filaments (2–16, default 4) are stacked
 in Z: Filament 1 (darkest) at the bottom, through to the lightest filament at
@@ -412,7 +417,9 @@ self-intersecting outline would be carved out by the even-odd fill as a hole.
 
 A **border** (0–5 mm) can be added to any shape (the full rectangle gets a
 frame around the image). Border rendering per mode:
-- Mosaic / Layered: Filament 1 (darkest auto-detected colour)
+- Mosaic: base color when a base slab exists; Filament 1 when the skin covers
+  the full height (no base)
+- Layered: Filament 1 (darkest auto-detected colour)
 - Lithophane: maximum thickness (darkest backlit)
 - CMYK: solid dark (full CMY + max white)
 
@@ -494,8 +501,8 @@ both pixelated and smoothed surfaces.
 
 - Keep the pixel size ≥ your nozzle diameter (the app warns below 0.4 mm):
   lower the resolution or increase the plate width.
-- 5 mm at 0.2 mm layer height = 25 layers; every color prints on every
-  layer, so expect plenty of filament swaps — that's normal for a mosaic.
+- 5 mm at 0.2 mm layer height = 25 layers; the base prints in one filament and
+  only the top skin layers swap colors — that's normal for a mosaic.
 - In layered mode there are only (N - 1) filament swaps total (at the band
   boundaries, e.g. 3 swaps for 4 colors), but note the plate height varies per
   pixel — darkest color regions are the thinnest.

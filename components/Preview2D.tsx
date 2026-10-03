@@ -27,6 +27,9 @@ export default function Preview2D({
   hMax,
   cmykPreview,
   shapeOverlay,
+  /** Mosaic border: pixel mask painted on top in the border (base) color. */
+  borderMask,
+  borderColor,
   onShapeMove,
 }: {
   grid: Uint8Array;
@@ -41,6 +44,8 @@ export default function Preview2D({
   cmykPreview?: Uint8ClampedArray;
   /** Outline + crosshair overlay for the selected shape. */
   shapeOverlay?: ShapeOverlay | null;
+  borderMask?: Uint8Array;
+  borderColor?: RGB;
   /** Click/drag on the preview moves the shape center (normalized 0..1). */
   onShapeMove?: (cx: number, cy: number) => void;
 }) {
@@ -83,6 +88,17 @@ export default function Preview2D({
         img.data[o + 1] = c[1];
         img.data[o + 2] = c[2];
         img.data[o + 3] = 255;
+      }
+      // Mosaic border ring prints in the base color — repaint those pixels.
+      if (borderMask && borderColor) {
+        for (let i = 0; i < grid.length; i++) {
+          if (!borderMask[i] || grid[i] === EMPTY) continue;
+          const o = i * 4;
+          img.data[o] = borderColor[0];
+          img.data[o + 1] = borderColor[1];
+          img.data[o + 2] = borderColor[2];
+          img.data[o + 3] = 255;
+        }
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -145,6 +161,8 @@ export default function Preview2D({
     hMax,
     cmykPreview,
     shapeOverlay,
+    borderMask,
+    borderColor,
   ]);
 
   const pick = (e: React.PointerEvent<HTMLCanvasElement>) => {

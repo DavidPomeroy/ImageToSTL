@@ -63,6 +63,8 @@ export default function Home() {
   const [colorLayers, setColorLayers] = useState(4);
   const [whiteMinLayers, setWhiteMinLayers] = useState(2);
   const [whiteMaxLayers, setWhiteMaxLayers] = useState(16);
+  const [mosaicTopMm, setMosaicTopMm] = useState(0.8);
+  const [mosaicBaseColor, setMosaicBaseColor] = useState<RGB>([24, 24, 27]);
   const [palette, setPalette] = useState<RGB[]>([]);
   const [fitNonce, setFitNonce] = useState(0);
   const [smooth, setSmooth] = useState(false);
@@ -180,7 +182,10 @@ export default function Home() {
                   },
             borderMm,
           },
-          curveDeg
+          curveDeg,
+          mode === "mosaic"
+            ? { topMm: mosaicTopMm, baseColor: mosaicBaseColor }
+            : undefined
         );
         if (processingRun.current !== runId) return;
         setExportParts(
@@ -216,6 +221,8 @@ export default function Home() {
     shapeCropH,
     borderMm,
     curveDeg,
+    mosaicTopMm,
+    mosaicBaseColor,
   ]);
   const hasGeometry = exportParts.length > 0;
   const fileBase =
@@ -303,6 +310,8 @@ export default function Home() {
                 colorLayers={colorLayers}
                 whiteMinLayers={whiteMinLayers}
                 whiteMaxLayers={whiteMaxLayers}
+                mosaicTopMm={mosaicTopMm}
+                mosaicBaseColor={mosaicBaseColor}
                 smooth={smooth}
                 shapeType={shapeType}
                 shapeSize={shapeSize}
@@ -314,12 +323,21 @@ export default function Home() {
                 onColorCount={setColorCount}
                 onResolution={setResolution}
                 onWidthMm={setWidthMm}
-                onDepthMm={setDepthMm}
+                onDepthMm={(v) => {
+                  setDepthMm(v);
+                  // Total thickness can never be less than the top color skin.
+                  setMosaicTopMm((t) => Math.min(t, v));
+                }}
                 onLayerHeight={setLayerHeight}
                 onMinThickness={setMinThickness}
                 onColorLayers={setColorLayers}
                 onWhiteMinLayers={setWhiteMinLayers}
                 onWhiteMaxLayers={setWhiteMaxLayers}
+                onMosaicTopMm={(v) =>
+                  // Clamp: skin can never exceed the total thickness.
+                  setMosaicTopMm(Math.min(v, depthMm))
+                }
+                onMosaicBaseColor={setMosaicBaseColor}
                 onSmooth={setSmooth}
                 onShapeType={setShapeType}
                 onShapeSize={setShapeSize}
@@ -476,6 +494,8 @@ export default function Home() {
                       hMin={processed.minThicknessMm}
                       hMax={processed.depthMm}
                       cmykPreview={processed.cmykPreview}
+                      borderMask={processed.border?.mask}
+                      borderColor={processed.border?.color}
                       shapeOverlay={
                         shapeType !== "rectangle" && processed
                           ? {
@@ -524,6 +544,23 @@ export default function Home() {
                           {processed.depthMm.toFixed(1)} mm
                         </dd>
                       </div>
+                      {processed.mode === "mosaic" && processed.mosaic && (
+                        <div className="flex justify-between">
+                          <dt className="text-zinc-500">
+                            {processed.mosaic.hasBase ? "Base + skin" : "Full-height skin"}
+                          </dt>
+                          <dd className="tabular-nums text-zinc-300">
+                            {processed.mosaic.hasBase ? (
+                              <>
+                                {processed.mosaic.baseTopMm.toFixed(1)} +{" "}
+                                {processed.mosaic.topMm.toFixed(1)} mm
+                              </>
+                            ) : (
+                              <>{processed.mosaic.topMm.toFixed(1)} mm</>
+                            )}
+                          </dd>
+                        </div>
+                      )}
                       {processed.mode === "layered" && processed.bands.length > 0 && (
                         <div className="flex justify-between">
                           <dt className="text-zinc-500">Height range</dt>
@@ -622,8 +659,20 @@ export default function Home() {
                       ? "One single-filament part: print flat with the relief side up, white or natural PLA, high infill (or several walls). Hold the print in front of a light — thin areas glow bright, thick areas stay dark."
                       : processed.mode === "cmyk"
                         ? "4 parts in print order — Cyan (bottom), Magenta, Yellow, then the White relief on top. Import the 3MF as one object with multiple parts (or all 4 STLs aligned at the origin) and assign each part its filament. Slice with the layer height you set, then backlight the print."
-                        : `The 3MF bundles all ${exportParts.length} color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all files together, aligned at the origin.`}
+                        : processed.mode === "mosaic" && processed.mosaic
+                          ? processed.mosaic.hasBase
+                            ? `The 3MF bundles the base plus all ${exportParts.length - 1} color skins with their filament colors: print the ${processed.mosaic.baseTopMm.toFixed(1)} mm base in one filament, then the ${processed.mosaic.topMm.toFixed(1)} mm color skin on top. Import as one object with multiple parts, aligned at the origin.`
+                            : `The 3MF bundles all ${exportParts.length} full-height color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all files together, aligned at the origin.`
+                          : `The 3MF bundles all ${exportParts.length} color parts with their filament colors: open it in Bambu Studio / PrusaSlicer, import as one object with multiple parts, and assign an extruder to each color. Or grab the STL zip and import all files together, aligned at the origin.`}
                   </p>
+                  {processed.mode === "mosaic" && processed.mosaic?.hasBase && (
+                    <p className="mb-4 max-w-2xl rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-emerald-300/90">
+                      Slice at {processed.layerHeight}&nbsp;mm layer height —
+                      the color skin starts at z ={" "}
+                      {processed.mosaic.baseTopMm.toFixed(1)}&nbsp;mm (layer{" "}
+                      {processed.bands[0]?.layer0}).
+                    </p>
+                  )}
                   {processed.mode === "layered" && swapBands.length > 0 && (
                     <p className="mb-4 max-w-2xl rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-emerald-300/90">
                       Slice at {processed.layerHeight}&nbsp;mm layer height
@@ -647,7 +696,11 @@ export default function Home() {
                           ? "Updating model…"
                           : mode === "lithophane"
                             ? "Download 3MF"
-                            : `Download 3MF (${exportParts.length} color parts)`}
+                            : mode === "mosaic"
+                              ? processed?.mosaic?.hasBase
+                                ? `Download 3MF (base + ${Math.max(0, exportParts.length - 1)} color skins)`
+                                : `Download 3MF (${exportParts.length} color parts)`
+                              : `Download 3MF (${exportParts.length} color parts)`}
                     </button>
                     <button
                       type="button"

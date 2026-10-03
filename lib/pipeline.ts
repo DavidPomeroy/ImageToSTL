@@ -5,8 +5,11 @@
 // coincident internal box faces.
 //
 // Print modes:
-//  - "mosaic":     every color region is solid from z=0 to z=depth, side by
-//                  side in XY (flat, uniform thickness).
+//  - "mosaic":     flat plate with a solid base plus a thin per-color skin
+//                  on top. Each color region is a prism over [baseTop, depth],
+//                  side by side in XY; the base (z=0..baseTop) is its own
+//                  filament colour. The skin thickness is user-selectable and
+//                  snapped to whole print layers.
 //  - "layered":    HueForge-style stack. Palette index 0 is the bottom
 //                  filament. Color k covers the Z band [bands[k].z0,
 //                  bands[k].z1] for every pixel whose palette index is >= k,
@@ -70,8 +73,12 @@ export interface ProcessedImage {
   gh: number;
   mode: PrintMode;
   layerHeight: number;
-  /** Per palette color; in mosaic mode each band is the full 0..depth. */
+  /** Per palette color; in mosaic mode each band is the color skin on top of the base. */
   bands: BandInfo[];
+  /** Mosaic mode with a base + color skin split: base/skin heights and base color. */
+  mosaic?: { baseTopMm: number; topMm: number; baseColor: RGB; hasBase: boolean };
+  /** Mosaic border: pixel mask (1 = border ring) + the color it prints in. */
+  border?: { mask: Uint8Array; color: RGB };
   meshes: ColorMeshData[];
   /** Non-empty pixel count (transparent pixels are empty space). */
   filledPixels: number;
@@ -324,7 +331,8 @@ export function processImageData(
   cmyk?: CmykOptions,
   smooth = false,
   shapeOpts?: { shape?: ShapeParams; borderMm?: number },
-  curveDeg = 0
+  curveDeg = 0,
+  mosaicOpts?: { topMm?: number; baseColor?: RGB }
 ): ProcessedImage {
   const gw = imageData.width;
   const gh = imageData.height;
@@ -336,8 +344,12 @@ export function processImageData(
   // by every part so all parts clip to the same silhouette. Resolution is
   // capped so huge images don't blow up mesh build time.
   const shape = shapeOpts?.shape;
+  const borderMmEarly = shapeOpts?.borderMm ?? 0;
   let fine: FineShapeGrid | null = null;
-  if (shape) {
+  // Note: fine is also needed when only a border is set (shape undefined):
+  // the mesh border ring is classified per fine cell, so without this the
+  // border silently does nothing on "Full".
+  if (shape || borderMmEarly > 0) {
     // Fine cells per pixel edge, capped so huge images stay snappy: the
     // silhouette only needs refinement along its ~1px boundary band, but
     // the fine grid covers the whole plate, so keep total fine cells in
@@ -354,7 +366,16 @@ export function processImageData(
         Math.floor(Math.sqrt(1_200_000 / (parts * gw * gh)))
       )
     );
-    fine = makeFineShapeGrid(makeShapeSilhouette(shape, gw, gh), gw, gh, sub);
+    fine = makeFineShapeGrid(
+      makeShapeSilhouette(
+        shape ?? { type: "rectangle", cx: 0.5, cy: 0.5, size: 1 },
+        gw,
+        gh
+      ),
+      gw,
+      gh,
+      sub
+    );
   }
   // A pixel contributes material when any of its fine cells is inside the
   // shape — exactly matching the mesh clip, so the silhouette never has
@@ -844,13 +865,36 @@ export function processImageData(
 
   fixPinches();
 
+  // Mosaic layer split, computed up front so the preview grid knows whether a
+  // base slab exists. The skin thickness snaps to whole print layers and the
+  // base takes the remaining height; when the skin covers the full height
+  // there is no base slab (and the border falls back to Filament 1).
+  const mosaicLh = layerHeight > 0 ? layerHeight : 0.2;
+  const mosaicTotalLayers = Math.max(2, Math.round(depthMm / mosaicLh));
+  const mosaicSnappedDepth = mosaicTotalLayers * mosaicLh;
+  const mosaicRawTopLayers = mosaicOpts?.topMm
+    ? Math.round(mosaicOpts.topMm / mosaicLh)
+    : Math.max(2, Math.round(0.8 / mosaicLh));
+  // Allow equality: the skin may cover the whole plate (then baseLayers = 0).
+  const mosaicTopLayers = Math.max(
+    1,
+    Math.min(mosaicTotalLayers, mosaicRawTopLayers)
+  );
+  const mosaicBaseLayers = mosaicTotalLayers - mosaicTopLayers;
+  const mosaicHasBaseLayers = mode === "mosaic" && mosaicBaseLayers > 0;
+
   const counts = new Array<number>(palette.length).fill(0);
   // Preview / metrics keep the pixel-level border ring (Filament 1, the
   // darkest); the mesh gets the ring as fine cells instead (ringSpec below),
   // so the printed ring reaches exactly out to the silhouette and its inner
-  // edge follows the shape instead of a pixel staircase.
+  // edge follows the shape instead of a pixel staircase. Exception: in mosaic
+  // mode the ring prints in the base color, so the preview grid keeps the
+  // underlying pixel colors and the border is painted separately (see
+  // `border` below). With no base slab the mosaic border falls back to
+  // Filament 1 like layered mode, so the grid must force index 0 there.
+  const borderIsBase = mosaicHasBaseLayers;
   const previewGrid =
-    cls && cls.some((c) => c === 1)
+    cls && cls.some((c) => c === 1) && !borderIsBase
       ? (() => {
           const g = grid.slice();
           for (let i = 0; i < n; i++) if (cls[i] === 1) g[i] = 0;
@@ -889,6 +933,8 @@ export function processImageData(
   let bands: BandInfo[];
   let meshes: ColorMeshData[];
   let effectiveDepth = depthMm;
+  /** Mosaic: true when a base slab exists below the color skin. */
+  let mosaicHasBase = false;
 
   if (mode === "layered") {
     bands = computeBands(palette.length, depthMm, layerHeight);
@@ -924,31 +970,126 @@ export function processImageData(
       };
     });
   } else {
-    bands = palette.map(() => ({
-      z0: 0,
-      z1: depthMm,
-      layer0: 1,
-      layer1: Math.max(1, Math.round(depthMm / layerHeight)),
-    }));
-    meshes = palette.map((color, i) => {
+    // ---- mosaic: solid base slab (its own filament) + thin per-color skin.
+    // The layer split (mosaicTotalLayers / mosaicTopLayers / baseLayers) was
+    // computed above. If the skin covers the full height there is no base slab
+    // at all — full-height color columns (and the border falls back to
+    // Filament 1). Layer splitting (like CMYK) keeps the mosaic parts manifold
+    // without coincident internal faces.
+    const baseLayers = mosaicBaseLayers;
+    const baseTop = baseLayers * mosaicLh;
+    const hasBase = baseLayers > 0;
+    mosaicHasBase = hasBase;
+    const skin: BandInfo = {
+      z0: baseTop,
+      z1: mosaicSnappedDepth,
+      layer0: baseLayers + 1,
+      layer1: mosaicTotalLayers,
+    };
+    const baseColor: RGB = mosaicOpts?.baseColor ?? palette[0] ?? [24, 24, 27];
+    bands = palette.map(() => ({ ...skin }));
+    effectiveDepth = mosaicSnappedDepth;
+    // Mosaic border ownership. With a base slab it owns the FULL-height ring
+    // (z 0..top) in the base color, so the skins own no part of it. With no
+    // base (skin == full height) the border falls back to Filament 1 exactly
+    // like layered mode: skin 0 owns the full-height ring.
+    const skinRingSpec = (
+      i: number,
+      z0: number,
+      z1: number
+    ): RingSpec | null => {
+      if (!ringMask) return null;
+      if (hasBase) {
+        // Base owns the ring; skins own none of it (clear it while repairing
+        // diagonal contacts — the base is solid there).
+        return {
+          px: ringPx,
+          mask: ringMask,
+          owns: false,
+          othersOwnRing: true,
+          z0,
+          z1,
+        };
+      }
+      // No base: layered-style — only skin 0 owns the border ring.
+      return {
+        px: ringPx,
+        mask: ringMask,
+        owns: i === 0,
+        othersOwnRing: false,
+        z0,
+        z1,
+      };
+    };
+    // othersSolid clearing per skin:
+    //  - with a base: every skin clears the full filled plate (the base slab
+    //    is solid underneath all of it);
+    //  - without a base: no clear (each pixel belongs to exactly one column),
+    //    matching the flat mosaic / layered handling.
+    const filledMask = new Uint8Array(n);
+    for (let p = 0; p < n; p++) if (grid[p] !== EMPTY) filledMask[p] = 1;
+    const skinOthersSolid = (): Uint8Array | null =>
+      hasBase ? filledMask : null;
+    const colorMeshes = palette.map((color, i) => {
       const z0s = new Float32Array(n);
       const z1s = new Float32Array(n);
       let count = 0;
       for (let p = 0; p < n; p++) {
         if (grid[p] === i) {
-          z1s[p] = depthMm;
+          z0s[p] = baseTop;
+          z1s[p] = mosaicSnappedDepth;
           count++;
         }
       }
       return {
         color,
-        name: `Color ${i + 1} (${rgbToHex(color)})`,
+        name: `Color ${i + 1} (${rgbToHex(color)}) z ${fmtZ(
+          baseTop
+        )}-${fmtZ(mosaicSnappedDepth)}mm`,
         pixelCount: count,
-        z0: 0,
-        z1: depthMm,
-        positions: buildMesh(z0s, z1s, false, ringSpecFor(i, 0, depthMm), null),
+        z0: baseTop,
+        z1: mosaicSnappedDepth,
+        positions: buildMesh(
+          z0s,
+          z1s,
+          false,
+          skinRingSpec(i, baseTop, mosaicSnappedDepth),
+          skinOthersSolid()
+        ),
       };
     });
+    // Base slab: every filled pixel, one solid part in the base color,
+    // including the full-height border ring. Skipped entirely when the skin
+    // covers the full height (no base visible).
+    const bz0 = new Float32Array(n);
+    const bz1 = new Float32Array(n);
+    for (let p = 0; p < n; p++) {
+      if (grid[p] !== EMPTY) bz1[p] = baseTop;
+    }
+    const basePositions = hasBase
+      ? buildMesh(
+          bz0,
+          bz1,
+          false,
+          ringMask
+            ? { px: ringPx, mask: ringMask, owns: true, othersOwnRing: true, z0: 0, z1: mosaicSnappedDepth }
+            : null,
+          filledMask
+        )
+      : [];
+    meshes = hasBase
+      ? [
+          ...colorMeshes,
+          {
+            color: baseColor,
+            name: `Base (${rgbToHex(baseColor)}) z 0-${fmtZ(baseTop)}mm`,
+            pixelCount: filled,
+            z0: 0,
+            z1: baseTop,
+            positions: basePositions,
+          },
+        ]
+      : colorMeshes;
   }
 
   const triangleCount =
@@ -970,6 +1111,34 @@ export function processImageData(
     mode,
     layerHeight,
     bands,
+    mosaic:
+      mode === "mosaic"
+        ? {
+            baseTopMm: bands[0]?.z0 ?? 0,
+            topMm: (bands[0]?.z1 ?? effectiveDepth) - (bands[0]?.z0 ?? 0),
+            baseColor: mosaicHasBase
+              ? (meshes[meshes.length - 1]?.color ?? ([24, 24, 27] as RGB))
+              : ([24, 24, 27] as RGB),
+            hasBase: mosaicHasBase,
+          }
+        : undefined,
+    // Mosaic border pixels (pixel-level ring) print in the base color — the
+    // 2D preview paints these on top of the grid so the ring shows base color
+    // instead of Filament 1. With no base the border falls back to Filament 1
+    // (layered-style) — but then the preview grid above already forced index
+    // 0, so no separate border overlay is needed.
+    border:
+      mode === "mosaic" && mosaicHasBase && cls && cls.some((c) => c === 1)
+        ? {
+            mask: (() => {
+              const m = new Uint8Array(n);
+              for (let i = 0; i < n; i++)
+                if (grid[i] !== EMPTY && cls[i] === 1) m[i] = 1;
+              return m;
+            })(),
+            color: meshes[meshes.length - 1]?.color ?? ([24, 24, 27] as RGB),
+          }
+        : undefined,
     meshes,
     filledPixels: filled,
     widthMm,

@@ -7,6 +7,8 @@ const TABS: { href: string; label: string; experimental?: boolean }[] = [
   { href: "/text", label: "Text → 3D" },
   { href: "/badge", label: "Badge → 3D" },
   { href: "/coaster", label: "Coaster → 3D" },
+  { href: "/frame", label: "Frame → 3D" },
+  { href: "/box", label: "Box → 3D" },
   { href: "/terrain", label: "Terrain → 3D", experimental: true },
 ];
 

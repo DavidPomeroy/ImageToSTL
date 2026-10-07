@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import Dropzone from "@/components/Dropzone";
 import Controls from "@/components/Controls";
 import ToolNav from "@/components/ToolNav";
@@ -19,6 +20,8 @@ import { autoPalette, collectPixels, type RGB } from "@/lib/quantize";
 import { customRectBounds, type ShapeType } from "@/lib/shapes";
 import { curveRadius } from "@/lib/curve";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
+import { saveFramePrefill, FRAME_SHAPE_TYPES } from "@/lib/framePrefill";
+import { saveBoxPrefill, BOX_SHAPE_TYPES } from "@/lib/boxPrefill";
 
 const Preview3D = dynamic(() => import("@/components/Preview3D"), {
   ssr: false,
@@ -50,6 +53,7 @@ function saveBlob(blob: Blob, name: string) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageName, setImageName] = useState("image");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -265,6 +269,70 @@ export default function Home() {
   const counts = processed ? processed.meshes.map((m) => m.pixelCount) : [];
   const pixelArea = processed ? processed.pixelSizeMm ** 2 : 0;
   const swapBands = processed ? processed.bands.slice(1) : [];
+
+  // "Copy settings to Frame → 3D": stash the plate's outline, size and curvature
+  // and open the frame tool, which picks them up and builds a matching frame.
+  const copyToFrame = useCallback(() => {
+    const height = processed
+      ? processed.heightMm
+      : image
+        ? (widthMm * image.naturalHeight) / image.naturalWidth
+        : widthMm;
+    saveFramePrefill({
+      shapeType: FRAME_SHAPE_TYPES.includes(shapeType) ? shapeType : "rectangle",
+      shapeCx,
+      shapeCy,
+      shapeSize,
+      plateWidthMm: widthMm,
+      plateHeightMm: Math.max(5, Math.round(height * 10) / 10),
+      plateThicknessMm: processed ? processed.depthMm : depthMm,
+      curveDeg,
+    });
+    router.push("/frame");
+  }, [
+    processed,
+    image,
+    widthMm,
+    depthMm,
+    shapeType,
+    shapeCx,
+    shapeCy,
+    shapeSize,
+    curveDeg,
+    router,
+  ]);
+
+  // "Copy settings to Box → 3D": stash the plate's outline and size and open the
+  // box tool, which builds a matching box whose lid receives this plate.
+  const copyToBox = useCallback(() => {
+    const height = processed
+      ? processed.heightMm
+      : image
+        ? (widthMm * image.naturalHeight) / image.naturalWidth
+        : widthMm;
+    saveBoxPrefill({
+      shapeType: BOX_SHAPE_TYPES.includes(shapeType) ? shapeType : "rectangle",
+      shapeCx,
+      shapeCy,
+      shapeSize,
+      plateWidthMm: widthMm,
+      plateHeightMm: Math.max(5, Math.round(height * 10) / 10),
+      plateThicknessMm: processed ? processed.depthMm : depthMm,
+      curveDeg,
+    });
+    router.push("/box");
+  }, [
+    processed,
+    image,
+    widthMm,
+    depthMm,
+    shapeType,
+    shapeCx,
+    shapeCy,
+    shapeSize,
+    curveDeg,
+    router,
+  ]);
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -716,6 +784,22 @@ export default function Home() {
                           : mode === "lithophane"
                             ? "Download STL"
                             : `Download STL zip (${exportParts.length} files)`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyToFrame}
+                      title="Open the Frame → 3D tool pre-filled with this plate's shape, size and curvature"
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20"
+                    >
+                      Copy settings to Frame → 3D
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyToBox}
+                      title="Open the Box → 3D tool pre-filled with this plate's shape and size, so it becomes the box lid"
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20"
+                    >
+                      Copy settings to Box → 3D
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-zinc-600">

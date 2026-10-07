@@ -51,6 +51,9 @@ import { buildBadgeFromMasks } from "../lib/badge";
 import { chamferToZero } from "../lib/textSign";
 import { clearCircle, fitHole, runCentre } from "../lib/masks";
 import { buildCoasterFromGrid, RELIEF_LEVELS } from "../lib/coaster";
+import { buildFrame, FRAME_SHAPES } from "../lib/frame";
+import { buildBox, BOX_SHAPES } from "../lib/box";
+import { buildPinX, buildKnuckleX, buildWebX } from "../lib/hinge";
 import {
   buildBuildingParts,
   buildingHeight,
@@ -604,6 +607,7 @@ for (const t of [
   "ghost",
   "bat",
   "leaf",
+  "maple",
   "acorn",
   "egg",
   "bunny",
@@ -976,6 +980,7 @@ console.log("randomised plate sweep:");
     "ghost",
     "bat",
     "leaf",
+    "maple",
     "acorn",
     "egg",
     "bunny",
@@ -2256,6 +2261,405 @@ check(
   `relief mesh stays small (${trisPerCell.toFixed(1)} triangles/cell, was 252 un-snapped)`
 );
 
+// ---- picture frame: a tray around the plate with an LED air gap ----
+console.log("picture frame:");
+const frameBase = {
+  plateWidthMm: 100,
+  plateHeightMm: 80,
+  plateThicknessMm: 5,
+  shapeType: "rectangle" as const,
+  shapeCx: 0.5,
+  shapeCy: 0.5,
+  shapeSize: 1,
+  clearanceMm: 0.3,
+  borderMm: 10,
+  ledgeMm: 3,
+  gapMm: 12,
+  revealMm: 1,
+  curveDeg: 0,
+  retain: "rebate" as const,
+  lipMm: 0,
+  lipOpenMm: 8,
+  topStop: false,
+  back: "panel" as const,
+  backMm: 2,
+  channelWidthMm: 10,
+  channelDepthMm: 1.5,
+  wireHoleMm: 0,
+  resolution: 300,
+  color: [24, 24, 27] as RGB,
+};
+const rectFrame = buildFrame(frameBase);
+// Same tolerance as the plate suite: 4-way diagonal "saddles" (point contacts
+// at sharp shape corners) are auto-repaired by slicers; holes / bad edges are
+// the real defects.
+const frameDefects = (p: number[]): number => {
+  const { holes, bad } = analyzeEdges(p);
+  return holes + bad;
+};
+check(
+  frameDefects(rectFrame.parts[0].positions) === 0,
+  "rectangular frame is watertight"
+);
+{
+  const top = 2 + 12 + 5 + 1; // back + gap + plate + reveal
+  check(
+    Math.abs(rectFrame.depthMm - top) < 1e-6,
+    `frame height = back+gap+plate+reveal (${rectFrame.depthMm})`
+  );
+  const tol = 3 * rectFrame.pixelSizeMm;
+  check(
+    Math.abs(rectFrame.bboxMm.x - (100 + 2 * 10)) < tol,
+    `frame widens the footprint (${rectFrame.bboxMm.x.toFixed(1)} mm)`
+  );
+  check(
+    Math.abs(rectFrame.bboxMm.y - (80 + 2 * 10)) < tol,
+    `frame footprint height (${rectFrame.bboxMm.y.toFixed(1)} mm)`
+  );
+  check(
+    Math.abs(rectFrame.heightAt(5, 45) - top) < 1e-6,
+    `wall stands full height (${rectFrame.heightAt(5, 45)})`
+  );
+  check(
+    Math.abs(rectFrame.heightAt(60, 45) - 2) < 1e-6,
+    `cavity floor is the back panel (${rectFrame.heightAt(60, 45)})`
+  );
+}
+let frameShapesBad = 0;
+for (const s of FRAME_SHAPES) {
+  const f = buildFrame({ ...frameBase, shapeType: s.type });
+  frameShapesBad += frameDefects(f.parts[0].positions);
+}
+check(
+  frameShapesBad === 0,
+  `every frame shape is watertight (${frameShapesBad} defects)`
+);
+const openFrame = buildFrame({ ...frameBase, back: "open" });
+check(
+  openFrame.heightAt(60, 45) === 0,
+  "open back leaves the cavity empty (rear LED access)"
+);
+const channelFrame = buildFrame({ ...frameBase, back: "channel" });
+check(
+  channelFrame.heightAt(60, 45) === 2 &&
+    frameDefects(channelFrame.parts[0].positions) === 0,
+  "LED-channel frame keeps the panel and stays watertight"
+);
+const holedFrame = buildFrame({ ...frameBase, wireHoleMm: 6 });
+check(
+  holedFrame.heightAt(holedFrame.widthMm / 2, holedFrame.heightMm / 2) === 0,
+  "wire hole bores through the back panel"
+);
+check(
+  frameDefects(holedFrame.parts[0].positions) === 0,
+  "wire-holed frame is watertight"
+);
+// slide-in lip: the plate drops in from the top edge (the lip is open there)
+const lipFrame = buildFrame({ ...frameBase, retain: "lip", lipMm: 2 });
+check(
+  lipFrame.parts.length === 2 &&
+    lipFrame.parts.every((p) => frameDefects(p.positions) === 0),
+  "slide-in lip adds a second watertight part"
+);
+{
+  const lip = lipFrame.parts[1].positions;
+  let yMax = -Infinity;
+  let yMin = Infinity;
+  for (let i = 1; i < lip.length; i += 3) {
+    if (lip[i] > yMax) yMax = lip[i];
+    if (lip[i] < yMin) yMin = lip[i];
+  }
+  // plate spans model Y 10..90 (10 mm border). The lip stops short of the top
+  // edge (the 8 mm opening) but runs down to the bottom edge.
+  check(
+    yMax < 86,
+    `slide-in lip leaves the top open (lip top ${yMax.toFixed(1)} mm)`
+  );
+  check(
+    yMin < 12,
+    `slide-in lip reaches the bottom edge (lip bottom ${yMin.toFixed(1)} mm)`
+  );
+}
+const stopFrame = buildFrame({
+  ...frameBase,
+  retain: "lip",
+  lipMm: 2,
+  topStop: true,
+});
+check(
+  stopFrame.parts.length === 2 &&
+    stopFrame.parts.every((p) => frameDefects(p.positions) === 0),
+  "top-stop tab keeps the lip watertight"
+);
+{
+  let yMax = -Infinity;
+  const lip = stopFrame.parts[1].positions;
+  for (let i = 1; i < lip.length; i += 3) if (lip[i] > yMax) yMax = lip[i];
+  check(
+    yMax > 88,
+    `top-stop tab reaches the plate's top edge (lip top ${yMax.toFixed(1)} mm)`
+  );
+}
+const closedLip = buildFrame({ ...frameBase, retain: "lip", lipMm: 2, lipOpenMm: 0 });
+{
+  const lip = closedLip.parts[1].positions;
+  let yMax = -Infinity;
+  for (let i = 1; i < lip.length; i += 3) if (lip[i] > yMax) yMax = lip[i];
+  check(
+    yMax > 88 && closedLip.warnings.some((w) => /closed ring/.test(w)),
+    "a 0 mm opening stays a closed ring and warns it cannot be inserted"
+  );
+}
+
+// curved frames: bend with the plate so the rebate follows the arc
+const curvedFrame = buildFrame({ ...frameBase, curveDeg: 180 });
+check(
+  frameDefects(curvedFrame.parts[0].positions) === 0,
+  "180° curved frame is watertight"
+);
+{
+  // vertices must sit in the plate's radial band: R - plateBottom .. R + plate
+  // thickness + reveal, measured from the bend axis at (0, R).
+  const R = 100 / ((180 * Math.PI) / 180);
+  let rMin = Infinity;
+  let rMax = -Infinity;
+  const pos = curvedFrame.parts[0].positions;
+  for (let i = 0; i < pos.length; i += 3) {
+    const r = Math.hypot(pos[i], pos[i + 1] - R);
+    if (r < rMin) rMin = r;
+    if (r > rMax) rMax = r;
+  }
+  check(
+    Math.abs(rMin - (R - 14)) < 0.6,
+    `curved frame inner radius follows the plate (${rMin.toFixed(2)} vs ${(R - 14).toFixed(2)})`
+  );
+  check(
+    Math.abs(rMax - (R + 6)) < 0.6,
+    `curved frame outer radius (${rMax.toFixed(2)} vs ${(R + 6).toFixed(2)})`
+  );
+}
+const curvedFull = buildFrame({ ...frameBase, curveDeg: 360 });
+check(
+  frameDefects(curvedFull.parts[0].positions) === 0,
+  "full-cylinder frame is watertight"
+);
+{
+  const R = 100 / ((359.5 * Math.PI) / 180);
+  check(
+    Math.abs(curvedFull.bboxMm.x - 2 * (R + 6)) < 1.5,
+    `full-cylinder outer diameter (${curvedFull.bboxMm.x.toFixed(1)} vs ${(2 * (R + 6)).toFixed(1)})`
+  );
+  check(
+    Math.abs(curvedFull.bboxMm.z - (80 + 2 * 10)) < 1,
+    `bending keeps the frame height (${curvedFull.bboxMm.z.toFixed(1)})`
+  );
+}
+
+// ---- box: a container whose lid is the Image → 3D plate ----
+console.log("box:");
+const boxBase = {
+  plateWidthMm: 100,
+  plateHeightMm: 80,
+  plateThicknessMm: 5,
+  shapeType: "rectangle" as const,
+  shapeCx: 0.5,
+  shapeCy: 0.5,
+  shapeSize: 1,
+  wallMm: 3,
+  depthMm: 30,
+  overhangMm: 1.5,
+  clearanceMm: 0.3,
+  plugDepthMm: 5,
+  lid: "separate" as const,
+  resolution: 220,
+  color: [24, 24, 27] as RGB,
+};
+const rectBox = buildBox(boxBase);
+const boxDefects = (p: number[]): number => {
+  const { holes, bad } = analyzeEdges(p);
+  return holes + bad;
+};
+check(
+  rectBox.parts.length === 2 &&
+    rectBox.parts.every((p) => boxDefects(p.positions) === 0),
+  "box + separate lid are both watertight"
+);
+{
+  check(
+    Math.abs(rectBox.depthMm - (3 + 30)) < 1e-6,
+    `box height = wall + depth (${rectBox.depthMm})`
+  );
+  check(
+    rectBox.preview.length === rectBox.gw * rectBox.gh * 4,
+    `2D preview matches the grid (${rectBox.gw}x${rectBox.gh})`
+  );
+  // wall corner stands full height; the cavity floor is just the wall
+  check(
+    Math.abs(rectBox.heightAt(1, 40) - 33) < 1e-6,
+    `box wall stands full height (${rectBox.heightAt(1, 40)})`
+  );
+  check(
+    Math.abs(rectBox.heightAt(50, 40) - 3) < 1e-6,
+    `cavity floor is the wall thickness (${rectBox.heightAt(50, 40)})`
+  );
+  // lid height = plug + (plate thickness + wall)
+  const lid = rectBox.parts[1].positions;
+  let zMax = -Infinity;
+  for (let i = 2; i < lid.length; i += 3) if (lid[i] > zMax) zMax = lid[i];
+  check(
+    Math.abs(zMax - (5 + 5 + 3)) < 1e-6,
+    `lid height = plug + plate recess + wall (${zMax})`
+  );
+  // box + lid sit side by side in one footprint
+  const tol = 4 * rectBox.pixelSizeMm;
+  check(
+    Math.abs(rectBox.bboxMm.x - (2 * 103 + 10)) < tol,
+    `box + lid footprint width (${rectBox.bboxMm.x.toFixed(1)} mm)`
+  );
+  check(
+    Math.abs(rectBox.bboxMm.z - 33) < 1e-6,
+    `assembled footprint never exceeds the box height (${rectBox.bboxMm.z})`
+  );
+}
+const noLidBox = buildBox({ ...boxBase, lid: "none" });
+check(
+  noLidBox.parts.length === 1 && boxDefects(noLidBox.parts[0].positions) === 0,
+  "an open box (no lid) is a single watertight part"
+);
+let boxShapesBad = 0;
+for (const s of BOX_SHAPES) {
+  const b = buildBox({ ...boxBase, shapeType: s.type });
+  boxShapesBad += b.parts.reduce((n, p) => n + boxDefects(p.positions), 0);
+}
+check(
+  boxShapesBad === 0,
+  `every box shape (box + lid) is watertight (${boxShapesBad} defects)`
+);
+
+// print-in-place hinged lid
+const hingedBox = buildBox({ ...boxBase, lid: "hinged" });
+check(
+  hingedBox.parts.length === 2 &&
+    hingedBox.parts.every((p) => boxDefects(p.positions) === 0),
+  "hinged box (box + pin, lid + knuckles) parts are watertight"
+);
+{
+  const box = hingedBox.parts[0].positions;
+  let boxZ = -Infinity;
+  for (let i = 2; i < box.length; i += 3) if (box[i] > boxZ) boxZ = box[i];
+  check(
+    boxZ > 33.5,
+    `hinge pin rises above the box rim (${boxZ.toFixed(1)} mm)`
+  );
+  const lid = hingedBox.parts[1].positions;
+  let lidZ = -Infinity;
+  for (let i = 2; i < lid.length; i += 3) if (lid[i] > lidZ) lidZ = lid[i];
+  check(
+    lidZ > 60,
+    `hinged lid prints standing open (top ${lidZ.toFixed(1)} mm)`
+  );
+}
+let hingedShapesBad = 0;
+for (const s of BOX_SHAPES) {
+  const b = buildBox({ ...boxBase, lid: "hinged", shapeType: s.type });
+  hingedShapesBad += b.parts.reduce((nn, p) => nn + boxDefects(p.positions), 0);
+}
+check(
+  hingedShapesBad === 0,
+  `every hinged shape is watertight (${hingedShapesBad} defects)`
+);
+{
+  // the diamond's pin spans its flat top edge, not the whole bounding box
+  const d = buildBox({ ...boxBase, lid: "hinged", shapeType: "diamond" });
+  const bp = d.parts[0].positions;
+  let xMin = Infinity;
+  let xMax = -Infinity;
+  for (let i = 0; i < bp.length; i += 3) {
+    if (bp[i + 2] > 33.5) {
+      // the pin sits above the rim
+      if (bp[i] < xMin) xMin = bp[i];
+      if (bp[i] > xMax) xMax = bp[i];
+    }
+  }
+  check(
+    xMax - xMin < d.bboxMm.x - 5,
+    `diamond hinge pin spans the flat top edge, not the box (${(xMax - xMin).toFixed(1)} < ${d.bboxMm.x.toFixed(1)} mm)`
+  );
+}
+{
+  // a pointed top (triangle) can't take a flat hinge → separate lid + warning
+  const t = buildBox({ ...boxBase, lid: "hinged", shapeType: "triangle" });
+  check(
+    t.warnings.some((w) => /flat top edge/.test(w)),
+    "triangle (pointed top) falls back to a separate lid with a warning"
+  );
+}
+
+// separate (assemble-after-printing) hinged lid — printed flat, no support
+const sepHinge = buildBox({ ...boxBase, lid: "hinged-separate" });
+check(
+  sepHinge.parts.length === 2 &&
+    sepHinge.parts.every((p) => boxDefects(p.positions) === 0),
+  "separate hinged box (box + pin, lid + knuckles) parts are watertight"
+);
+{
+  const box = sepHinge.parts[0].positions;
+  let boxZ = -Infinity;
+  for (let i = 2; i < box.length; i += 3) if (box[i] > boxZ) boxZ = box[i];
+  check(
+    boxZ > 33.5,
+    `separate hinge pin stands proud of the rim (${boxZ.toFixed(1)} mm)`
+  );
+  const lid = sepHinge.parts[1].positions;
+  let lidZ = -Infinity;
+  for (let i = 2; i < lid.length; i += 3) if (lid[i] > lidZ) lidZ = lid[i];
+  check(
+    lidZ < 33,
+    `separate hinged lid prints flat, not standing (top ${lidZ.toFixed(1)} mm)`
+  );
+  const tol = 4 * sepHinge.pixelSizeMm;
+  check(
+    Math.abs(sepHinge.bboxMm.x - (2 * 103 + 10)) < tol,
+    `separate hinged lid prints beside the box (${sepHinge.bboxMm.x.toFixed(1)} mm wide)`
+  );
+}
+let sepHingeShapesBad = 0;
+for (const s of BOX_SHAPES) {
+  const b = buildBox({ ...boxBase, lid: "hinged-separate", shapeType: s.type });
+  sepHingeShapesBad += b.parts.reduce((nn, p) => nn + boxDefects(p.positions), 0);
+}
+check(
+  sepHingeShapesBad === 0,
+  `every separate-hinged shape is watertight (${sepHingeShapesBad} defects)`
+);
+{
+  const t = buildBox({
+    ...boxBase,
+    lid: "hinged-separate",
+    shapeType: "triangle",
+  });
+  check(
+    t.warnings.some((w) => /flat top edge/.test(w)),
+    "separate hinge on a pointed top falls back to a separate lid with a warning"
+  );
+}
+
+// hinge solids must be wound outward — a flipped side wall renders "inside out"
+{
+  const pinVol = signedVolume(buildPinX(0, 0, 2, 0, 10));
+  const webVol = signedVolume(buildWebX(0, 0, 2, 1, 0, 3));
+  const knVol = signedVolume(
+    buildKnuckleX(0, 0, 2, 4, 0, 5, (270 * Math.PI) / 180, (80 * Math.PI) / 180)
+  );
+  check(
+    pinVol > 100 && webVol > 5.5 && knVol > 90,
+    `hinge solids wind outward (pin ${pinVol.toFixed(1)}, web ${webVol.toFixed(
+      1
+    )}, knuckle ${knVol.toFixed(1)})`
+  );
+}
+
+
 console.log("exports:");
 async function main() {
   // 3MF from the mosaic parts
@@ -2405,6 +2809,23 @@ async function main() {
   check(
     /Terrain/.test(terrModel) && /Base plate/.test(terrModel),
     "terrain 3MF part names present"
+  );
+
+  // frame export: body (+ lip) bundle into one 3MF
+  const frameBlob = await build3MF(
+    lipFrame.parts.map((p) => ({
+      name: p.name,
+      color: p.color,
+      positions: p.positions,
+    }))
+  );
+  const frameZip = await JSZip.loadAsync(await frameBlob.arrayBuffer());
+  const frameModel = await frameZip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (frameModel.match(/<object /g) || []).length === 2 &&
+      /Frame body/.test(frameModel) &&
+      /Frame lip/.test(frameModel),
+    "lip frame 3MF has 2 objects (body + lip)"
   );
 
 

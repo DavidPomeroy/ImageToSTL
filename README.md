@@ -1,6 +1,6 @@
 # Image → Multi-Color 3D Print
 
-A small Next.js web app with five tools that all export slicer-ready, multi-part 3MF / STL:
+A small Next.js web app with seven tools that all export slicer-ready, multi-part 3MF / STL:
 
 - **Image → 3D** (`/`) — turns any uploaded image into a **3D-printable plate**
   (default **5 mm thick**): a flat multi-color mosaic (2–16 filaments), a
@@ -14,6 +14,15 @@ A small Next.js web app with five tools that all export slicer-ready, multi-part
 - **Coaster → 3D** (`/coaster`) — an image on a round / hex / octagon / square
   **coaster** with a raised rim (flat multi-colour mosaic or a single-filament
   relief).
+- **Frame → 3D** (`/frame`) — a **picture frame** for a plate from the Image → 3D
+  tool: it follows the plate's outline (full rectangle or a standard shape, flat
+  or curved), the plate drops into a rebate, and a cavity behind it holds an
+  **LED strip or board** (open back, or a back panel with a wire hole / LED
+  channel).
+- **Box → 3D** (`/box`) — a **storage box** whose lid is a plate from the
+  Image → 3D tool: it follows the plate's outline, and a separate lid (a plug
+  that fits the opening, with a recess the plate drops into) is printed beside
+  it, so the plate becomes the box lid.
 - **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
   a map** into a solid **3D terrain tile** with a variable-height relief, an
   optional coloured base plate and optional elevation colour bands.
@@ -228,6 +237,101 @@ An uploaded image becomes a **coaster** with a raised rim. Two modes:
 Like the badge, every part is manifold. Export as one 3MF (base + one part per
 colour) or an STL zip.
 
+## Frame → 3D (`/frame`)
+
+A **picture frame** for a plate made on the Image → 3D page — sized so the plate
+drops straight in. The frame follows the plate's outline: the **full rectangle**
+and the **standard shapes** (square, triangle, hexagon, circle, heart, star,
+diamond, cross).
+
+Enter the plate's settings (width, height, thickness and — for a standard shape
+— the shape size) plus the frame geometry. Or press **Copy settings to
+Frame → 3D** on the Image → 3D page: it carries the plate's outline, size,
+thickness and curvature over and opens this tool pre-filled. (Shapes the frame
+cannot build — Custom and the seasonal categories — fall back to the full
+rectangle.)
+
+- **Rebate only** — the plate sits in a recess and is held by friction or tape
+  (no overhangs). This is the default.
+- **Front lip (slide-in)** — a rim that holds the plate's front edge. A closed
+  ring would trap a rigid plate, so the lip is **open across the plate's top
+  edge**: the plate drops in from the top, tucks behind the side/bottom lip and
+  rests on the ledge (keep that edge up). An optional **top-stop tab** is a thin
+  centred snap fit over the opening (leave it off for thick/rigid plates). The
+  lip overhangs, so bridge/support it or print the frame front-down; it is a
+  second part in the same colour.
+- **Air gap** — a cavity behind the plate sized for an **LED strip or board**
+  (8–15&nbsp;mm suits most). The back is either **open** (rear access), a
+  **solid panel** with a bored **wire hole**, or a panel with an **LED channel**
+  groove just inside the ledge.
+- **Curvature** — match the Image → 3D *Curvature* setting and the frame bends
+  around the same axis (a partial arc up to a full lamp-shade cylinder), so its
+  rebate follows the curved plate. The side border is capped automatically so a
+  near-360° frame never wraps past a full turn and overlaps itself.
+
+The frame body is a single manifold heightfield — the perimeter wall, the rebate
+ledge that supports the plate and the cavity floor are one per-cell height above
+the bed, so the whole body is one part with no coincident internal faces. The
+outline is derived from the plate silhouette with a signed distance field, so the
+border width is uniform all round and the rebate follows the true outline
+instead of a scaled copy. For a curved frame the mesh is built flat and then bent
+with the plate's own transform (`lib/curve.ts`: inner radius `R = width / theta`,
+image facing outward), so the rebate lands exactly where the curved plate does.
+Exports as one 3MF or STL (two parts when the front lip is on). Shape corners can
+leave the same tolerated 4-way "saddle" point contacts as the flat plate —
+slicers auto-repair them.
+
+## Box → 3D (`/box`)
+
+A **storage box** whose lid is a plate made on the Image → 3D page. The box
+follows the plate's outline — the **full rectangle** and the **standard shapes**
+(square, triangle, hexagon, circle, heart, star, diamond, cross) — with a floor
+and perimeter walls, and a separate **lid** printed beside it.
+
+Enter the plate's settings (width, height, thickness and — for a standard shape
+— the shape size) plus the box geometry. Or press **Copy settings to Box → 3D**
+on the Image → 3D page: it carries the plate's outline and size over and opens
+this tool pre-filled. (Shapes the box cannot build — Custom and the seasonal
+categories — fall back to the full rectangle.)
+
+- **Box depth** — the interior cavity depth, from the floor top to the opening.
+- **Wall thickness** — the box walls and floor (a single, uniform thickness).
+- **Lid** — *Open box* (no lid), *Separate lid*, *Hinged lid*, or *Hinged lid
+  (separate parts)*. The separate lid lands on the box rim (the plate footprint
+  is larger than the opening, so it cannot drop in) and carries a **plug** on
+  its underside that registers into the opening.
+- **Lid overhang / Fit clearance / Plug depth** — how far the plate overhangs
+  the opening, the lid-to-box fit gap, and how deep the plug enters.
+- **Hinged lid** — a **print-in-place pin hinge** runs along the shape's flat
+  **top** edge: a round pin (part of the box, along that edge, never wider than
+  the box) passes through C-shaped knuckles on the lid with a **hinge
+  clearance** (0.2–0.35&nbsp;mm suits most FDM printers); the lid prints
+  **standing open at 90°**, in line with the wall, so it is self-supporting.
+  Break the hinge free with a gentle wiggle after printing. Outlines with a flat
+  top edge (rectangle, square, hexagon, diamond, cross) take the hinge; a
+  pointed top (triangle, star, circle, heart) falls back to a separate lid.
+  (Planned, later: hinging those on a flat side/bottom edge instead.)
+- **Hinged lid (separate parts)** — the same pin-and-knuckle hinge, but the lid
+  prints **flat beside the box** (like a separate lid) instead of standing open,
+  so it needs **no support**. The box carries the round pin, lifted on a short
+  mount just outside its flat top edge; **slide the lid's knuckles onto the pin
+  from one end** to assemble — no breaking free, no flex. The wrap keeps the lid
+  captive, and it hinges open. Same flat-top-edge rule as the print-in-place
+  hinge; pointed tops fall back to a separate lid.
+
+The lid is a **picture-frame-style recess**: the plate drops into a shallow
+pocket in the lid's top, so the lid holds it. A separate lid is built from the
+same manifold heightfield as the box, then shifted beside it (a 10&nbsp;mm gap)
+so the two parts print flat, side by side, in one job — no overlapping geometry,
+so the lid lifts off. The print-in-place hinged lid is the same heightfield,
+opened 90° about the hinge, with the pin and knuckles added as extra solids (the
+pin overlaps the wall, the knuckles overlap the lid, so a slicer unions each to
+its leaf while the pin clearance keeps the two free). The separate hinged lid is
+that same heightfield printed **flat**, with knuckles added in place; the pin is
+lifted onto an L-shaped mount on the box's top edge so both halves still print
+flat and slot together. Exports as one 3MF or STL (two parts when the lid is
+on); print the plate from the Image → 3D tool separately and seat it in the lid.
+
 ## Terrain → 3D (`/terrain`) — experimental, may not work as expected
 
 > **Experimental:** this tool may not work as expected. It depends on
@@ -340,16 +444,24 @@ round trips, tile-range / zoom selection, terrarium encode ↔ decode, bilinear
 resampling, and manifold terrain meshes (single colour, sea level, stepped colour
 bands and the base plate). The badge and coaster builders are checked too: their
 parts must come out manifold (plate + raised text; base + one part per colour;
-and the single-filament relief coaster).
+and the single-filament relief coaster). The picture-frame builder is covered as
+well: the tray must stay watertight for every supported shape, its footprint must
+equal the plate plus the border, the air gap behind the plate must match the
+setting, the wire hole must bore the back panel, the slide-in lip must leave the
+top edge open (with the tab reaching it when the stop is on), and a bent
+(curved) frame's vertices must stay inside the plate's radial band with the
+rebate at the plate's bend radius.
 
 ## Project layout
 
 ```
 app/               Next.js app router pages (/ image tool, /text sign tool,
-                   /terrain tool), layout, styles
+                   /badge, /coaster, /frame, /box, /terrain), layout, styles
 components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D,
                    TextControls (text sign controls), BadgeControls,
-                   CoasterControls, TerrainControls (terrain controls),
+                   CoasterControls, FrameControls (picture frame controls),
+                   BoxControls (storage box controls),
+                   TerrainControls (terrain controls),
                    MapPicker (Leaflet location picker), ToolNav (shared tabs),
                    PreviewGeneric (shared multi-part 3D viewer)
 lib/quantize.ts    median cut + farthest-point seeded k-means, pixel mapping
@@ -375,8 +487,13 @@ lib/bounds.ts      bounding box + centre of triangle-soup parts
 lib/masks.ts       canvas shape masks (badge/coaster) + erode / hole ops
 lib/badge.ts       badge geometry: shaped plate + raised/engraved text + keyring hole
 lib/coaster.ts     coaster geometry: shaped base + mosaic colours / relief
+lib/frame.ts       picture-frame geometry: shaped tray + rebate + LED air gap
+lib/framePrefill.ts  Image → 3D → Frame → 3D settings hand-off (sessionStorage)
+lib/box.ts         storage-box geometry: shaped container + separate plug/recess lid
+lib/hinge.ts       print-in-place pin/knuckle hinge solids (extruded profiles)
+lib/boxPrefill.ts  Image → 3D → Box → 3D settings hand-off (sessionStorage)
 lib/buildings.ts   OSM building footprints (Overpass) → extruded prisms
-scripts/           core-logic test
+scripts/           core-logic test + shape-outline tracer (trace-shape.ts)
 ```
 
 ## Bambu Studio notes
@@ -398,10 +515,11 @@ scripts/           core-logic test
 ## Shapes & borders
 
 Besides the full-rectangle plate (**Full**) and a free **Custom** crop, the
-print can take one of **29 outline shapes**: square, circle, heart, star,
+print can take one of **30 outline shapes**: square, circle, heart, star,
 diamond, cross, triangle, hexagon, Christmas tree, snowflake, stocking, bell,
-gingerbread man, gingerbread woman, pumpkin, ghost, bat, leaf, acorn, egg,
-bunny, flower, tulip, butterfly, shamrock, sun, shell, starfish and moon.
+gingerbread man, gingerbread woman, pumpkin, ghost, bat, leaf, maple leaf,
+acorn, egg, bunny, flower, tulip, butterfly, shamrock, sun, shell, starfish and
+moon.
 They are grouped in the picker's collection dropdown — **Standard**,
 **Christmas**, **Halloween**, **Autumn**, **Easter**, **Spring**, **Summer**
 and **Occasions** — and choosing a collection selects its first shape straight

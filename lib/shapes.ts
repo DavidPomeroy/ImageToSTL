@@ -24,6 +24,7 @@ export type ShapeType =
   | "ghost"
   | "bat"
   | "leaf"
+  | "maple"
   | "acorn"
   | "egg"
   | "bunny"
@@ -92,6 +93,7 @@ export const SHAPE_CATEGORIES: {
     label: "Autumn",
     shapes: [
       { type: "leaf", label: "Leaf" },
+      { type: "maple", label: "Maple leaf" },
       { type: "acorn", label: "Acorn" },
     ],
   },
@@ -352,39 +354,63 @@ export function shapePolygon(
       return pts;
     }
     case "bell": {
-      // christmas bell: domed top with the knob spliced into the dome outline
-      // (the dome arc is interrupted where the knob sits, so the outline never
-      // doubles back), flared rim, clapper bump
-      const pts: [number, number][] = [];
-      const cy = 0.2;
-      const R = 0.55;
-      const knobHalf = 0.12;
-      const aFoot = Math.acos(knobHalf / R); // dome angle at the knob's foot
-      const footY = cy + R * Math.sin(aFoot);
-      const N = 12;
-      // dome: right rim up to the knob's right foot
-      for (let k = 0; k <= N; k++) {
-        const a = (aFoot * k) / N;
-        pts.push([R * Math.cos(a), cy + R * Math.sin(a)]);
-      }
-      // knob: up the right foot, across the flat top, down the left foot
-      pts.push([knobHalf, footY], [0.1, 0.92], [-0.1, 0.92], [-knobHalf, footY]);
-      // dome: knob's left foot over to the left rim
-      for (let k = 0; k <= N; k++) {
-        const a = Math.PI - aFoot + (aFoot * k) / N;
-        pts.push([R * Math.cos(a), cy + R * Math.sin(a)]);
-      }
-      // left rim, clapper bump, right rim up to the dome start
-      pts.push(
-        [-0.8, -0.55],
-        [-0.62, -0.55],
-        [-0.62, -0.68],
-        [-0.25, -0.82], // clapper bump
-        [0.25, -0.82],
-        [0.62, -0.68],
-        [0.62, -0.55],
-        [0.8, -0.55]
-      );
+      // Christmas bell: a domed body flaring out to a flat rim, a small arched
+      // knob spliced into the dome on top (the dome is interrupted at the
+      // knob's feet, so the outline never doubles back), and a semicircular
+      // clapper hanging below the rim. Every vertex stays within [-1, 1] so
+      // nothing is clipped: unit space maps exactly onto the plate.
+      const pts: [number, number][] = [
+        // knob: down its right side from the top
+        [0, 0.95],
+        [0.13, 0.91],
+        [0.19, 0.84],
+        [0.2, 0.77], // knob's right foot, meeting the dome
+        // dome, then the right wall of the body flaring down to the rim
+        [0.31, 0.74],
+        [0.43, 0.66],
+        [0.53, 0.54],
+        [0.6, 0.36],
+        [0.65, 0.14],
+        [0.69, -0.1],
+        [0.73, -0.34],
+        [0.76, -0.52],
+        [0.77, -0.6], // body meets the rim (right)
+        // rim: right end, rounded
+        [0.83, -0.61],
+        [0.86, -0.66],
+        [0.85, -0.71],
+        [0.8, -0.73], // rim bottom-right
+        // rim underside across to the clapper
+        [0.24, -0.73],
+        // clapper: a semicircle bulging below the rim
+        [0.22, -0.8],
+        [0.17, -0.9],
+        [0.09, -0.97],
+        [0, -1],
+        [-0.09, -0.97],
+        [-0.17, -0.9],
+        [-0.22, -0.8],
+        [-0.24, -0.73],
+        // rim underside to its left end
+        [-0.8, -0.73],
+        [-0.85, -0.71],
+        [-0.86, -0.66],
+        [-0.83, -0.61],
+        [-0.77, -0.6], // body meets the rim (left)
+        // left wall of the body, rising and narrowing into the dome
+        [-0.76, -0.52],
+        [-0.73, -0.34],
+        [-0.69, -0.1],
+        [-0.65, 0.14],
+        [-0.6, 0.36],
+        [-0.53, 0.54],
+        [-0.43, 0.66],
+        [-0.31, 0.74],
+        [-0.2, 0.77], // knob's left foot
+        // knob: up its left side to the top
+        [-0.19, 0.84],
+        [-0.13, 0.91],
+      ];
       return pts;
     }
     case "gingerbread-man": {
@@ -426,54 +452,176 @@ export function shapePolygon(
       return pts;
     }
     case "leaf": {
-      // maple-ish leaf: pointed lobes around a stem
+      // Simple pointed (ovate) leaf with a short stem, traced from the
+      // reference image leaf.png (repo root): a single smooth outline — the
+      // central vein and side veins in the reference are interior lines and
+      // are not part of the silhouette. RDP-simplified outer contour, 38
+      // vertices, listed clockwise in unit space from the tip.
       return [
-        [0, 1],
-        [0.18, 0.62],
-        [0.55, 0.75],
-        [0.42, 0.4],
-        [0.85, 0.35],
-        [0.5, 0.1],
-        [0.75, -0.25],
-        [0.35, -0.3],
-        [0.28, -0.7],
-        [0.08, -0.45],
-        [0, -1], // stem tip
-        [-0.08, -0.45],
-        [-0.28, -0.7],
-        [-0.35, -0.3],
-        [-0.75, -0.25],
-        [-0.5, 0.1],
-        [-0.85, 0.35],
-        [-0.42, 0.4],
-        [-0.55, 0.75],
-        [-0.18, 0.62],
+        [0.1288, 1.0],
+        [0.1717, 0.9957],
+        [0.2189, 0.9442],
+        [0.2704, 0.8584],
+        [0.412, 0.6652],
+        [0.5322, 0.4506],
+        [0.5794, 0.3391],
+        [0.6223, 0.1803],
+        [0.6395, 0.03],
+        [0.6352, -0.1159],
+        [0.6094, -0.2361],
+        [0.5794, -0.3176],
+        [0.5193, -0.4292],
+        [0.4721, -0.4936],
+        [0.382, -0.5837],
+        [0.2833, -0.6524],
+        [0.1288, -0.721],
+        [-0.0558, -0.7682],
+        [-0.0601, -0.9828],
+        [-0.0773, -1.0],
+        [-0.103, -1.0],
+        [-0.1202, -0.9742],
+        [-0.1159, -0.7597],
+        [-0.2446, -0.6996],
+        [-0.3863, -0.6052],
+        [-0.4893, -0.5021],
+        [-0.5536, -0.4077],
+        [-0.5966, -0.3176],
+        [-0.6309, -0.1931],
+        [-0.6395, -0.133],
+        [-0.6352, 0.0429],
+        [-0.6137, 0.1373],
+        [-0.5751, 0.2403],
+        [-0.5107, 0.3562],
+        [-0.4378, 0.4592],
+        [-0.3691, 0.5408],
+        [-0.2146, 0.6953],
+        [-0.0215, 0.8584],
+      ] as [number, number][];
+    }
+    case "maple": {
+      // Classic 5-lobed maple leaf with a stem, traced from the reference
+      // image maple.webp (repo root; the reference is already a flat silhouette
+      // outline). RDP-simplified outer contour, 60 vertices: the central lobe
+      // and tip, the two upper side lobes with their deep notches, the two
+      // lower lobes, and the centre-bottom stem. Listed clockwise in unit
+      // space from the tip.
+      return [
+        [-0.0035, 1.0],
+        [0.0035, 1.0],
+        [0.1809, 0.6661],
+        [0.2157, 0.6557],
+        [0.3513, 0.7217],
+        [0.2922, 0.3043],
+        [0.2957, 0.2487],
+        [0.313, 0.2487],
+        [0.3409, 0.2661],
+        [0.5461, 0.44],
+        [0.5635, 0.367],
+        [0.5809, 0.3496],
+        [0.6574, 0.3565],
+        [0.8522, 0.3983],
+        [0.7409, 0.0678],
+        [0.7617, 0.033],
+        [0.8383, -0.0087],
+        [0.8417, -0.0191],
+        [0.5148, -0.273],
+        [0.5113, -0.2904],
+        [0.5287, -0.3287],
+        [0.64, -0.4609],
+        [0.313, -0.4817],
+        [0.2922, -0.5026],
+        [0.2817, -0.5617],
+        [0.0243, -0.4296],
+        [0.0139, -0.7113],
+        [-0.007, -0.8991],
+        [-0.0278, -0.9896],
+        [-0.0591, -1.0],
+        [-0.087, -0.9826],
+        [-0.087, -0.9617],
+        [-0.0626, -0.8678],
+        [-0.0313, -0.6661],
+        [-0.0209, -0.4296],
+        [-0.2748, -0.5583],
+        [-0.2852, -0.5583],
+        [-0.2957, -0.4957],
+        [-0.313, -0.4817],
+        [-0.6365, -0.4643],
+        [-0.6365, -0.4504],
+        [-0.5252, -0.3252],
+        [-0.5113, -0.28],
+        [-0.5357, -0.2522],
+        [-0.8417, -0.0191],
+        [-0.8313, -0.0052],
+        [-0.7652, 0.0296],
+        [-0.7409, 0.0643],
+        [-0.8522, 0.3983],
+        [-0.6226, 0.3496],
+        [-0.5809, 0.3496],
+        [-0.5635, 0.367],
+        [-0.5461, 0.4435],
+        [-0.3409, 0.2661],
+        [-0.313, 0.2487],
+        [-0.2957, 0.2487],
+        [-0.2922, 0.3043],
+        [-0.3478, 0.7217],
+        [-0.2261, 0.6591],
+        [-0.1809, 0.6661],
       ] as [number, number][];
     }
     case "acorn": {
-      // acorn: oval nut below, wide flat-topped cap above with a stem nub.
-      // The nut runs from its right shoulder around the bottom to the left
-      // shoulder, then the cap runs back left -> right; the closing edges are
-      // the two short vertical sides (no chord across the body).
-      const pts: [number, number][] = [];
-      const N = 32;
-      for (let k = 0; k <= N / 2; k++) {
-        const t = -(k * Math.PI) / (N / 2); // 0 -> -pi: right -> bottom -> left
-        pts.push([Math.cos(t) * 0.62, Math.sin(t) * 0.75 - 0.15]);
-      }
-      // cap: left rim up over the flat top (stem nub) and down to the right rim
-      pts.push(
-        [-0.62, -0.08],
-        [-0.85, 0.25],
-        [-0.7, 0.55],
-        [-0.15, 0.62],
-        [-0.12, 0.85],
-        [0.08, 0.85],
-        [0.1, 0.62],
-        [0.7, 0.55],
-        [0.85, 0.25],
-        [0.62, -0.08]
-      );
+      // Acorn: a tapering nut below a wide, overhanging cap, with a short
+      // stalked stem on top leaning to the right. The cap's rim tucks back in
+      // over the nut (the silhouette has a small undercut, exactly as the
+      // reference does). Every vertex stays within [-1, 1].
+      const pts: [number, number][] = [
+        // stem: down its right side from the tip
+        [0.02, 0.96],
+        [0.09, 0.94],
+        [0.12, 0.87],
+        [0.11, 0.8],
+        [0.1, 0.72], // stem's right foot, meeting the cap
+        // cap: right of the stem, swelling out and down over the rim
+        [0.2, 0.69],
+        [0.34, 0.67],
+        [0.47, 0.6],
+        [0.58, 0.48],
+        [0.67, 0.33],
+        [0.72, 0.17],
+        [0.74, 0.03], // cap's widest, at the right rim
+        [0.72, -0.05], // cap rim's bottom-right
+        // the cap overhangs the nut, so the outline tucks back in
+        [0.55, -0.07],
+        [0.49, -0.16], // nut's right shoulder
+        // nut: tapering down to a rounded tip
+        [0.48, -0.32],
+        [0.44, -0.5],
+        [0.37, -0.66],
+        [0.27, -0.81],
+        [0.15, -0.92],
+        [0.05, -0.99],
+        [0, -1], // nut tip
+        [-0.05, -0.99],
+        [-0.15, -0.92],
+        [-0.27, -0.81],
+        [-0.37, -0.66],
+        [-0.44, -0.5],
+        [-0.48, -0.32],
+        [-0.49, -0.16], // nut's left shoulder
+        [-0.55, -0.07],
+        [-0.72, -0.05], // cap rim's bottom-left
+        [-0.74, 0.03], // cap's widest, at the left rim
+        [-0.72, 0.17],
+        [-0.67, 0.33],
+        [-0.58, 0.48],
+        [-0.47, 0.6],
+        [-0.34, 0.67],
+        [-0.2, 0.69],
+        // stem: up its left side to the tip
+        [-0.06, 0.72], // stem's left foot
+        [-0.07, 0.8],
+        [-0.06, 0.87],
+        [-0.01, 0.93],
+      ];
       return pts;
     }
     case "egg": {
@@ -523,28 +671,48 @@ export function shapePolygon(
       return pts;
     }
     case "tulip": {
-      // tulip cup with 3 pointed petals, stem and two leaves
-      const pts: [number, number][] = [];
-      // cup: left rim -> petal tips -> right rim
-      pts.push(
-        [-0.45, 0.5],
-        [-0.45, 0.9],
-        [-0.22, 0.7],
-        [0, 1],
-        [0.22, 0.7],
-        [0.45, 0.9],
-        [0.45, 0.5],
-        [0.35, 0.1],
-        [0.15, -0.1],
-        [0.5, -0.3], // right leaf tip
-        [0.12, -0.35],
-        [0.08, -0.9], // stem right
-        [-0.08, -0.9], // stem left
-        [-0.12, -0.35],
-        [-0.5, -0.3], // left leaf tip
-        [-0.15, -0.1],
-        [-0.35, 0.1]
-      );
+      // Tulip: a domed centre petal over two flanking petals, a wide rounded
+      // cup, and a single plain stem — matching the reference silhouette.
+      // Deliberately NO leaves (the previous outline sprouted one each side),
+      // and every vertex stays within [-1, 1] so nothing is clipped at the
+      // plate edge: unit space maps exactly onto the plate.
+      const pts: [number, number][] = [
+        // left petal: outer tip, rounded top, then the notch by the centre petal
+        [-0.72, 0.52],
+        [-0.6, 0.64],
+        [-0.28, 0.4], // left notch
+        // centre petal, domed rather than a spike
+        [-0.13, 0.78],
+        [0, 0.86], // centre petal top
+        [0.13, 0.78],
+        // right notch and right petal
+        [0.28, 0.4], // right notch
+        [0.6, 0.64],
+        [0.72, 0.52], // right petal outer tip
+        // right wall of the cup: bulges out, then curves in to the base
+        [0.75, 0.32],
+        [0.76, 0.1],
+        [0.73, -0.08],
+        [0.65, -0.22],
+        [0.49, -0.31],
+        [0.29, -0.34],
+        [0.16, -0.35], // base, right of the stem
+        // stem, with a slight foot at the bottom
+        [0.06, -0.37],
+        [0.06, -0.92],
+        [0.07, -0.98],
+        [-0.07, -0.98],
+        [-0.06, -0.92],
+        [-0.06, -0.37],
+        // left wall of the cup, mirroring the right, back up to the petal tip
+        [-0.16, -0.35],
+        [-0.29, -0.34],
+        [-0.49, -0.31],
+        [-0.65, -0.22],
+        [-0.73, -0.08],
+        [-0.76, 0.1],
+        [-0.75, 0.32],
+      ];
       return pts;
     }
     case "butterfly":

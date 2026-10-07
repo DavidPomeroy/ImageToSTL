@@ -256,23 +256,25 @@ export default function CoasterPage() {
 
             {result && parts.length > 0 ? (
               <>
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-6">
                   <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50">
                     <div className="border-b border-zinc-800 px-4 py-2">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
                         Preview (2D)
                       </h3>
                     </div>
-                    <div className="bg-zinc-950 p-2">
-                      <Preview2D
-                        grid={result.grid}
-                        gw={result.gw}
-                        gh={result.gh}
-                        palette={palette}
-                        heights={result.mode === "relief" ? result.relief : undefined}
-                        hMin={0}
-                        hMax={result.depthMm}
-                      />
+                    <div className="flex items-center justify-center bg-zinc-950 p-2">
+                      <div className="w-full max-w-md">
+                        <Preview2D
+                          grid={result.grid}
+                          gw={result.gw}
+                          gh={result.gh}
+                          palette={palette}
+                          heights={result.mode === "relief" ? result.relief : undefined}
+                          hMin={0}
+                          hMax={result.depthMm}
+                        />
+                      </div>
                     </div>
                   </div>
                   <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50">

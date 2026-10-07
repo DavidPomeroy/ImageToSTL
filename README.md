@@ -302,6 +302,11 @@ categories — fall back to the full rectangle.)
   its underside that registers into the opening.
 - **Lid overhang / Fit clearance / Plug depth** — how far the plate overhangs
   the opening, the lid-to-box fit gap, and how deep the plug enters.
+- **Plug bevel** — the plug's walls are drafted (0–45&nbsp;° from vertical) so the
+  plug is full width at the lid and tapers narrower toward its bed end. This
+  keeps the walls self-supporting (≤45&nbsp;°) when the lid is printed
+  plug-down, so the plug needs no support, and eases it into the opening; the
+  top stays full width so it still fits. 0&nbsp;° gives straight vertical walls.
 - **Hinged lid** — a **print-in-place pin hinge** runs along the shape's flat
   **top** edge: a round pin (part of the box, along that edge, never wider than
   the box) passes through C-shaped knuckles on the lid with a **hinge

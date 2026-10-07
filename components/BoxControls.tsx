@@ -20,6 +20,7 @@ export interface BoxControlValues {
   overhangMm: number;
   clearanceMm: number;
   plugDepthMm: number;
+  plugBevelDeg: number;
   hingeClearanceMm: number;
   // output
   resolution: number;
@@ -157,6 +158,15 @@ export default function BoxControls({
             step={0.5}
             unit=" mm"
             onChange={(plugDepthMm) => patch({ plugDepthMm })}
+          />
+          <Slider
+            label="Plug bevel"
+            value={v.plugBevelDeg}
+            min={0}
+            max={45}
+            step={5}
+            unit="°"
+            onChange={(plugBevelDeg) => patch({ plugBevelDeg })}
           />
         </>
       )}

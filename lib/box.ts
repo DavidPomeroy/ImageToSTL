@@ -91,6 +91,10 @@ export interface BoxInput {
   clearanceMm: number;
   /** How deep the lid's plug enters the opening (mm). */
   plugDepthMm: number;
+  /** Lid plug draft/bevel angle from vertical (degrees, 0–45). The plug is full
+   *  width at the lid and tapers this much narrower at the bed end so its walls
+   *  stay self-supporting (no support) when the lid is printed plug-down. */
+  plugBevelDeg?: number;
   /** Hinged lid only: radial pin clearance (mm). */
   hingeClearanceMm?: number;
   /** Build a matching separate lid, printed beside the box. */
@@ -206,6 +210,22 @@ export function buildBox(input: BoxInput): BoxResult {
   const plugThresh = overCells + clrCells; // inside the plug
   const recessThresh = -clrCells; // inside the plate recess
   const outerReach = Math.max(padX, padY); // outside the box
+
+  // Plug bevel: a draft so the plug's walls stay self-supporting when the lid is
+  // printed plug-down. The plug is full width at the lid and tapers `bevelCells`
+  // narrower at the bed end; the angle is clamped to 45° (the support limit) and
+  // so it can never eat the whole plug.
+  const bevelDeg = clamp(input.plugBevelDeg ?? 45, 0, 45);
+  let maxDist = 0;
+  for (let i = 0; i < n; i++) if (dist[i] > maxDist) maxDist = dist[i];
+  const bevelCells = Math.min(
+    (plugDepth * Math.tan((bevelDeg * Math.PI) / 180)) / pixelSize,
+    maxDist * 0.5
+  );
+  // Snap the bevel to a whole number of steps: the chamfer distance mixes 1 and
+  // √2, so a continuous ramp makes z-values that differ by <1e-3 and produce
+  // degenerate (zero-height) faces. Discrete levels keep the z cuts clean.
+  const bevelSteps = Math.max(1, Math.round(bevelCells));
 
   // ---- heights (mm) ----
   const floor = wall;
@@ -346,7 +366,17 @@ export function buildBox(input: BoxInput): BoxResult {
     for (let i = 0; i < n; i++) {
       const s = dist[i];
       if (!rectangular && s < -outerReach) continue; // outside the lid
-      lz0[i] = s >= plugThresh ? 0 : plugDepth; // plug reaches the bed
+      // The plug reaches the bed at full width; its outer band is beveled so the
+      // wall tapers in toward the bed (self-supporting when printed plug-down).
+      if (bevelCells > 1e-6) {
+        if (s >= plugThresh + bevelCells) lz0[i] = 0;
+        else if (s >= plugThresh) {
+          const t = clamp((s - plugThresh) / bevelCells, 0, 1);
+          lz0[i] = plugDepth * (1 - Math.round(t * bevelSteps) / bevelSteps);
+        } else lz0[i] = plugDepth;
+      } else {
+        lz0[i] = s >= plugThresh ? 0 : plugDepth; // plug reaches the bed
+      }
       lz1[i] = s >= recessThresh ? lidTop - plateThk : lidTop; // plate recess
       any = true;
     }

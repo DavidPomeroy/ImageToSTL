@@ -2659,6 +2659,33 @@ check(
   );
 }
 
+// plug bevel: the plug tapers toward the bed (self-supporting printed plug-down)
+{
+  const bedWidth = (r: ReturnType<typeof buildBox>): number => {
+    const lid = r.parts[1].positions;
+    let x0 = Infinity,
+      x1 = -Infinity;
+    for (let i = 0; i < lid.length; i += 3)
+      if (lid[i + 2] < 0.05) {
+        if (lid[i] < x0) x0 = lid[i];
+        if (lid[i] > x1) x1 = lid[i];
+      }
+    return x1 - x0;
+  };
+  const flat = buildBox({ ...boxBase, plugBevelDeg: 0 });
+  const bev = buildBox({ ...boxBase, plugBevelDeg: 45 });
+  check(
+    bedWidth(flat) > 0 && bedWidth(bev) < bedWidth(flat) - 5,
+    `plug bevel tapers the plug at the bed (${bedWidth(flat).toFixed(
+      1
+    )} → ${bedWidth(bev).toFixed(1)} mm)`
+  );
+  check(
+    bev.parts.every((p) => boxDefects(p.positions) === 0),
+    "bevelled plug stays watertight"
+  );
+}
+
 
 console.log("exports:");
 async function main() {

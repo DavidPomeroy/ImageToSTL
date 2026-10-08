@@ -53,6 +53,7 @@ import { clearCircle, fitHole, runCentre } from "../lib/masks";
 import { buildCoasterFromGrid, RELIEF_LEVELS } from "../lib/coaster";
 import { buildFrame, FRAME_SHAPES } from "../lib/frame";
 import { buildBox, BOX_SHAPES } from "../lib/box";
+import { buildDrawers } from "../lib/drawers";
 import { buildPinX, buildKnuckleX, buildWebX } from "../lib/hinge";
 import {
   buildBuildingParts,
@@ -2686,6 +2687,140 @@ check(
   );
 }
 
+// ---- drawer cabinet: open-front cabinet + N drawers printed beside it ----
+console.log("drawers:");
+const drawerBase = {
+  cabinetWidthMm: 150,
+  cabinetDepthMm: 150,
+  cabinetHeightMm: 150,
+  wallMm: 4,
+  floorMm: 4,
+  roofMm: 4,
+  shelfMm: 4,
+  drawerCount: 3,
+  trayWallMm: 3,
+  trayFloorMm: 3,
+  frontMm: 5,
+  chamferMm: 3,
+  fitClearanceMm: 0.3,
+  gapMm: 0.4,
+  resolution: 260,
+  color: [240, 200, 40] as RGB,
+  drawerColor: [240, 240, 240] as RGB,
+};
+{
+  const d = buildDrawers(drawerBase);
+  const drawDefects = (p: number[]): number => {
+    const { holes, bad } = analyzeEdges(p);
+    return holes + bad;
+  };
+  check(
+    d.parts.length === d.drawerCount + 2,
+    `parts = N drawers + cabinet + shelves (${d.parts.length})`
+  );
+  check(
+    d.parts.every((p) => drawDefects(p.positions) === 0),
+    "every drawer part is watertight"
+  );
+  check(
+    d.parts.every((p) => p.positions.length > 0 && p.positions.length % 9 === 0),
+    "drawer part positions are valid triangle soups"
+  );
+  check(
+    Math.abs(d.widthMm - 150) < 1e-6 && Math.abs(d.heightMm - 150) < 1e-6,
+    `cabinet footprint matches the grid (${d.widthMm.toFixed(1)} x ${d.heightMm.toFixed(1)} mm)`
+  );
+  check(
+    Math.abs(d.depthMm - 150) < 1e-6,
+    `cabinet height (${d.depthMm} mm)`
+  );
+  check(
+    Math.abs(d.compartmentHeightMm - (150 - 4 - 4 - 2 * 4) / 3) < 1e-6,
+    `compartment height = interior / N (${d.compartmentHeightMm.toFixed(2)} mm)`
+  );
+  check(
+    d.preview.length === d.gw * d.gh * 4,
+    `2D preview matches the grid (${d.gw}x${d.gh})`
+  );
+  // wall corner stands full height; the cavity floor is the floor thickness
+  check(
+    Math.abs(d.heightAt(1, 75) - 150) < 1e-6,
+    `wall stands full height (${d.heightAt(1, 75)})`
+  );
+  check(
+    Math.abs(d.heightAt(75, 20) - 4) < 1e-6,
+    `interior floor = floor thickness (${d.heightAt(75, 20)})`
+  );
+  // drawers print beside the cabinet, so the layout is wider than the cabinet
+  check(
+    d.bboxMm.x > d.widthMm + 20 && d.bboxMm.z <= d.depthMm + 1e-6,
+    `layout places drawers beside the cabinet (bbox ${d.bboxMm.x.toFixed(
+      0
+    )} mm, height ${d.bboxMm.z.toFixed(1)} mm)`
+  );
+
+  // a single-drawer cabinet has no shelves part (cabinet + drawer)
+  const one = buildDrawers({ ...drawerBase, drawerCount: 1 });
+  check(
+    one.parts.length === 2 &&
+      one.parts.every((p) => drawDefects(p.positions) === 0),
+    "1-drawer cabinet is 2 watertight parts (cabinet + drawer)"
+  );
+  // a full sweep of drawer counts stays watertight
+  let sweepBad = 0;
+  for (let nc = 1; nc <= 6; nc++) {
+    const r = buildDrawers({ ...drawerBase, drawerCount: nc });
+    sweepBad += r.parts.reduce((s, p) => s + drawDefects(p.positions), 0);
+  }
+  check(sweepBad === 0, `drawer counts 1..6 stay watertight (${sweepBad} defects)`);
+
+  // the chamfer shrinks the bed-level footprint (the bottom face is inset by c)
+  const bedMinX = (p: number[]): number => {
+    let m = Infinity;
+    for (let i = 0; i < p.length; i += 3) if (p[i + 2] < 0.05 && p[i] < m) m = p[i];
+    return m;
+  };
+  const square = buildDrawers({ ...drawerBase, chamferMm: 0 });
+  const bevelled = buildDrawers({ ...drawerBase, chamferMm: 3 });
+  check(
+    Math.abs(bedMinX(square.parts[0].positions)) < 1e-6 &&
+      Math.abs(bedMinX(bevelled.parts[0].positions) - 3) < 1e-6,
+    `chamfer insets the bed-level footprint (${bedMinX(
+      square.parts[0].positions
+    ).toFixed(1)} → ${bedMinX(bevelled.parts[0].positions).toFixed(1)} mm)`
+  );
+  // the front panel is full width so its edges are the cube's front edges
+  const panelW = (r: ReturnType<typeof buildDrawers>): number => {
+    const p = r.parts[r.parts.length - 1].positions;
+    let x0 = Infinity, x1 = -Infinity;
+    for (let i = 0; i < p.length; i += 3) {
+      if (p[i] < x0) x0 = p[i];
+      if (p[i] > x1) x1 = p[i];
+    }
+    return x1 - x0;
+  };
+  check(
+    Math.abs(panelW(bevelled) - 150) < 1e-6,
+    `the flush drawer front spans the full cube width (${panelW(bevelled).toFixed(
+      1
+    )} mm)`
+  );
+  // a chamfer larger than the walls/roof is clamped with a warning
+  const bigCh = buildDrawers({ ...drawerBase, chamferMm: 40 });
+  check(
+    bigCh.chamferMm < 40 && bigCh.warnings.some((w) => /Chamfer/.test(w)),
+    `an over-large chamfer is clamped and warned (${bigCh.chamferMm.toFixed(1)} mm)`
+  );
+  {
+    let chBad = 0;
+    for (const cc of [0, 1, 2, 3]) {
+      const r = buildDrawers({ ...drawerBase, chamferMm: cc });
+      chBad += r.parts.reduce((s, p) => s + drawDefects(p.positions), 0);
+    }
+    check(chBad === 0, `chamfers 0..3 mm stay watertight (${chBad} defects)`);
+  }
+}
+
 
 console.log("exports:");
 async function main() {
@@ -2853,6 +2988,24 @@ async function main() {
       /Frame body/.test(frameModel) &&
       /Frame lip/.test(frameModel),
     "lip frame 3MF has 2 objects (body + lip)"
+  );
+
+  // drawer cabinet export: N + 2 parts bundle into one 3MF
+  const drawCab = buildDrawers(drawerBase);
+  const drawBlob = await build3MF(
+    drawCab.parts.map((p) => ({
+      name: p.name,
+      color: p.color,
+      positions: p.positions,
+    }))
+  );
+  const drawZip = await JSZip.loadAsync(await drawBlob.arrayBuffer());
+  const drawModel = await drawZip.file("3D/3dmodel.model")!.async("string");
+  check(
+    (drawModel.match(/<object /g) || []).length === drawCab.parts.length &&
+      /Drawer 1/.test(drawModel) &&
+      /Cabinet/.test(drawModel),
+    `drawer 3MF has ${drawCab.parts.length} objects (cabinet + shelves + drawers)`
   );
 
 

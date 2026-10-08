@@ -1,6 +1,6 @@
 # Image → Multi-Color 3D Print
 
-A small Next.js web app with seven tools that all export slicer-ready, multi-part 3MF / STL:
+A small Next.js web app with eight tools that all export slicer-ready, multi-part 3MF / STL:
 
 - **Image → 3D** (`/`) — turns any uploaded image into a **3D-printable plate**
   (default **5 mm thick**): a flat multi-color mosaic (2–16 filaments), a
@@ -23,6 +23,9 @@ A small Next.js web app with seven tools that all export slicer-ready, multi-par
   Image → 3D tool: it follows the plate's outline, and a separate lid (a plug
   that fits the opening, with a recess the plate drops into) is printed beside
   it, so the plate becomes the box lid.
+- **Drawers → 3D** (`/drawers`) — a freestanding **chest of drawers**: an
+  open-front cabinet divided into 1–8 compartments, plus matching drawer trays
+  printed beside it. Tune the cabinet size, wall/shelf thickness and drawer fit.
 - **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
   a map** into a solid **3D terrain tile** with a variable-height relief, an
   optional coloured base plate and optional elevation colour bands.
@@ -337,6 +340,47 @@ lifted onto an L-shaped mount on the box's top edge so both halves still print
 flat and slot together. Exports as one 3MF or STL (two parts when the lid is
 on); print the plate from the Image → 3D tool separately and seat it in the lid.
 
+## Drawers → 3D (`/drawers`)
+
+A freestanding **chest of drawers** built from a few parameters — no image
+needed. The cabinet is an open-front box (floor + left/right/back walls + roof)
+divided by (N − 1) shelves into **1–8 compartments**, and **N drawer trays**
+(box open at the top, with a taller **front panel** that closes the compartment
+opening and overhangs the sides as a stop) are laid out beside it, so both print
+flat and support-free.
+
+- **Width / Depth / Height** — the cabinet's outer size (independent, so it can
+  be square or a shallow/wide desktop unit).
+- **Drawers** — how many compartments (and drawer trays) to build.
+- **Wall / Floor / Roof / Shelf thickness** — the cabinet walls, its base, its
+  top and the dividers between compartments.
+- **Drawer tray wall / tray floor / front panel thickness** — the tray's own
+  walls and floor and the thickness of the front face.
+- **Chamfer (cube edges)** — a straight **45° chamfer** applied to **all twelve
+  outer edges** of the cabinet (the 4 vertical corners, the 4 top edges and the
+  4 bottom edges). The drawer fronts are **full width** and carry the same
+  chamfer on their left/right edges, so a closed cabinet reads as one beveled
+  cube. The chamfer is clamped to the thinnest of the wall / floor / roof /
+  front panel (a warning appears if it had to be reduced). 0&nbsp;mm gives the
+  plain square box. The bevel overhangs at the bottom, so print with a brim.
+- **Drawer fit clearance** — the gap between a drawer and its opening, per
+  enclosed side (0.2–0.4&nbsp;mm suits most FDM printers).
+- **Drawer vertical gap** — play left between a drawer's panel and its
+  compartment so it never rubs.
+
+**How it is built** — a heightfield cannot slope an outer face (its side walls
+are always vertical) and can only staircase a corner, so the cabinet is built as
+**one explicit closed polyhedron**: the chamfered box's 6 shrunken face
+rectangles, its 12 edge-chamfer rectangles and 8 corner triangles, with the
+front cavity cut as a rectangular pocket (the front face becomes a ring,
+triangulated with `earcut`). The (N&nbsp;−&nbsp;1) shelves are exact boxes. Each
+drawer is an explicit **full-width front panel** (two front vertical corners cut
+by the chamfer) plus an explicit open-top **tray**, laid out in a column beside
+the cabinet (a 6&nbsp;mm gap). Import as one object with multiple parts: the
+slicer unions the cabinet, its shelves and the drawer trays, and each part takes
+one extruder colour. (The mesh-level geometry tests check every part stays
+watertight for chamfers 0–3&nbsp;mm across 1–6 drawers.)
+
 ## Terrain → 3D (`/terrain`) — experimental, may not work as expected
 
 > **Experimental:** this tool may not work as expected. It depends on
@@ -461,11 +505,13 @@ rebate at the plate's bend radius.
 
 ```
 app/               Next.js app router pages (/ image tool, /text sign tool,
-                   /badge, /coaster, /frame, /box, /terrain), layout, styles
+                   /badge, /coaster, /frame, /box, /drawers, /terrain),
+                   layout, styles
 components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D,
                    TextControls (text sign controls), BadgeControls,
                    CoasterControls, FrameControls (picture frame controls),
                    BoxControls (storage box controls),
+                   DrawersControls (drawer cabinet controls),
                    TerrainControls (terrain controls),
                    MapPicker (Leaflet location picker), ToolNav (shared tabs),
                    PreviewGeneric (shared multi-part 3D viewer)
@@ -497,6 +543,8 @@ lib/framePrefill.ts  Image → 3D → Frame → 3D settings hand-off (sessionSto
 lib/box.ts         storage-box geometry: shaped container + separate plug/recess lid
 lib/hinge.ts       print-in-place pin/knuckle hinge solids (extruded profiles)
 lib/boxPrefill.ts  Image → 3D → Box → 3D settings hand-off (sessionStorage)
+lib/drawers.ts     drawer-cabinet geometry: open-front cabinet + shelf/roof slabs
+                   + separate drawer trays (printed beside)
 lib/buildings.ts   OSM building footprints (Overpass) → extruded prisms
 scripts/           core-logic test + shape-outline tracer (trace-shape.ts)
 ```

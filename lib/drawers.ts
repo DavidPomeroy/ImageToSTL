@@ -44,6 +44,10 @@ export interface DrawersInput {
   roofMm: number;
   /** Shelf / divider thickness between compartments (mm). */
   shelfMm: number;
+  /** Width of the two side rails that form each shelf (mm). The drawer tray
+   *  rests on them and the middle of the compartment stays open — a full slab
+   *  would waste filament (the reference "?"-block drawers do the same). */
+  shelfRailMm: number;
   /** Number of drawers / compartments. */
   drawerCount: number;
   /** Drawer tray wall thickness (mm). */
@@ -52,7 +56,8 @@ export interface DrawersInput {
   trayFloorMm: number;
   /** Drawer front panel thickness (mm). */
   frontMm: number;
-  /** Drawer-to-opening fit clearance, per enclosed side (mm). */
+  /** Drawer-to-opening fit clearance, per enclosed side (mm). Also the dovetail
+   *  joint clearance between a front panel and its tray. */
   fitClearanceMm: number;
   /** Vertical play between a drawer and its compartment (mm). */
   gapMm: number;
@@ -63,8 +68,14 @@ export interface DrawersInput {
   resolution: number;
   /** Cabinet colour. */
   color: RGB;
-  /** Drawer colour. */
+  /** Drawer tray colour. */
   drawerColor: RGB;
+  /** Drawer front colour (the fronts print as their own parts). */
+  frontColor: RGB;
+  /** Tray wall style for the three non-front walls. */
+  trayWallStyle: "solid" | "hex";
+  /** Hex hole size (across flats, mm) when `trayWallStyle` is "hex". */
+  hexMm: number;
 }
 
 export interface DrawersPart {
@@ -75,6 +86,20 @@ export interface DrawersPart {
 
 export interface DrawersResult {
   parts: DrawersPart[];
+  /**
+   * The same drawers pushed home into the cabinet — the panel's back flush on
+   * the cabinet's front face, its grooves straddling the compartment's tenons,
+   * with the tray slid in behind it. Held in the model's own space (x = width,
+   * y = depth, z = height) so the 3D viewer shows the chest standing upright
+   * with its drawers in, rather than lying on its back as it prints.
+   */
+  assembled: {
+    parts: DrawersPart[];
+    /** How far a drawer slides out when the preview opens it (mm). */
+    openMm: number;
+    bboxMm: { x: number; y: number; z: number };
+    centerMm: { x: number; y: number };
+  };
   gw: number;
   gh: number;
   pixelSizeMm: number;
@@ -112,6 +137,13 @@ type V3 = [number, number, number];
  * order is chosen automatically so the face normal points AWAY from `C` (a
  * point inside the solid) — this keeps a hand-built solid outward-wound without
  * hand-checking every face. Degenerate (zero-area) triangles are skipped.
+ *
+ * Only safe while `C` is strictly off every face's plane: if a face lies in a
+ * plane through `C` the test is a tie, the winding is left as given, and an
+ * inward-facing face renders see-through (and `analyzeEdges`-style checks, which
+ * count undirected edges, won't notice). Use `pushFace` with an explicit
+ * outward direction there — e.g. the drawer front's groove floors, which sit on
+ * the panel's mid-plane.
  */
 function pushOriented(out: number[], pts: V3[], C: V3): void {
   const n = pts.length;
@@ -156,19 +188,7 @@ function pushRing(
   y: number,
   dir: V3
 ): void {
-  const flat: number[] = [];
-  for (const p of outer) flat.push(p[0], p[1]);
-  const holeStart = flat.length / 2;
-  for (const p of hole) flat.push(p[0], p[1]);
-  const tris = earcut(flat, [holeStart], 2);
-  for (let i = 0; i < tris.length; i += 3) {
-    const t: V3[] = [];
-    for (let k = 0; k < 3; k++) {
-      const j = tris[i + k] * 2;
-      t.push([flat[j], y, flat[j + 1]]);
-    }
-    pushFace(out, t, dir);
-  }
+  pushPolygonFlat(out, outer, 1, y, dir, [hole]);
 }
 
 /**
@@ -202,7 +222,22 @@ function pushRingZ(
  * direction). Used where the solid's centroid is not on the material side of
  * the face — cavity / pocket walls, and the drawer tray's inner faces.
  */
-function pushFace(out: number[], pts: V3[], dir: V3): void {
+/**
+ * Append a polygon oriented so its normal points along `dir` (its outward
+ * direction). Used where the solid's centroid is not on the material side of
+ * the face — cavity / pocket walls, and the drawer tray's inner faces.
+ *
+ * `keepDegenerate` keeps zero-area triangles. earcut emits such triangles when
+ * a hole ring is collinear with a face edge (the hex honeycomb does this); they
+ * add no area, but dropping them would leave the shared edges with only one
+ * triangle, i.e. a hole in the mesh.
+ */
+function pushFace(
+  out: number[],
+  pts: V3[],
+  dir: V3,
+  keepDegenerate = false
+): void {
   const n = pts.length;
   if (n < 3) return;
   const [ax, ay, az] = pts[0];
@@ -213,7 +248,7 @@ function pushFace(out: number[], pts: V3[], dir: V3): void {
   const nx = uy * vz - uz * vy;
   const ny = uz * vx - ux * vz;
   const nz = ux * vy - uy * vx;
-  if (nx === 0 && ny === 0 && nz === 0) return; // degenerate polygon
+  if (nx === 0 && ny === 0 && nz === 0 && !keepDegenerate) return;
   const dot = nx * dir[0] + ny * dir[1] + nz * dir[2];
   const P = dot < 0 ? [pts[0], ...pts.slice(1).reverse()] : pts;
   for (let i = 1; i < n - 1; i++) {
@@ -223,7 +258,9 @@ function pushFace(out: number[], pts: V3[], dir: V3): void {
     const cX = e1y * e2z - e1z * e2y;
     const cY = e1z * e2x - e1x * e2z;
     const cZ = e1x * e2y - e1y * e2x;
-    if (Math.abs(cX) + Math.abs(cY) + Math.abs(cZ) < 1e-9) continue;
+    if (Math.abs(cX) + Math.abs(cY) + Math.abs(cZ) < 1e-9 && !keepDegenerate) {
+      continue;
+    }
     out.push(a[0], a[1], a[2], b[0], b[1], b[2], d[0], d[1], d[2]);
   }
 }
@@ -259,11 +296,18 @@ function pushBox(
 }
 
 /**
- * The cabinet: a rectangular box with a 45° chamfer `c` on all 12 outer edges,
- * minus a rectangular pocket open at the front (the drawer cavity). Returns one
- * closed, manifold triangle soup. The pocket is [px0,px1] × [0,py1] × [pz0,pz1];
- * the caller guarantees c < wall/floor/roof so the pocket stays clear of the
+ * The cabinet: a rectangular box with a 45° chamfer `c` on its edges, minus a
+ * rectangular pocket open at the front (the drawer cavity). Returns one closed,
+ * manifold triangle soup. The pocket is [px0,px1] × [0,py1] × [pz0,pz1]; the
+ * caller guarantees c < wall/floor/roof so the pocket stays clear of the
  * chamfers and the front face keeps a rim.
+ *
+ * The bevel is held off the **front face**: over the body (y ∈ [c, D−c]) the four
+ * long edges are cut by `x + z = c` (and its mirrors), but the cut fades linearly
+ * to nothing over the front collar — `x + z = y` — so the front stays a plain
+ * full-width square and the drawer fronts are the only chamfered things there.
+ * Both cuts meet exactly at y = c, so there is no step: bottom/top/left/right are
+ * still convex hexagons.
  */
 function buildChamferedCabinet(
   W: number, D: number, H: number, c: number,
@@ -272,51 +316,67 @@ function buildChamferedCabinet(
   const out: number[] = [];
   const C: V3 = [W / 2, D / 2, H / 2];
 
-  // 6 face rectangles (the front face is the ring, below)
-  pushOriented(out, [[c, c, 0], [W - c, c, 0], [W - c, D - c, 0], [c, D - c, 0]], C); // z=0
-  pushOriented(out, [[c, c, H], [c, D - c, H], [W - c, D - c, H], [W - c, c, H]], C); // z=H
-  pushOriented(out, [[0, c, c], [0, D - c, c], [0, D - c, H - c], [0, c, H - c]], C); // x=0
-  pushOriented(out, [[W, c, c], [W, c, H - c], [W, D - c, H - c], [W, D - c, c]], C); // x=W
+  // The four long faces fan out over the collar at the front (the bevel fades to
+  // nothing by the front face). Each has a reflex corner, so earcut — not a fan.
+  const dedupe = (pts: [number, number][]): [number, number][] => {
+    const near = (a: [number, number], b: [number, number]) =>
+      Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+    const kept = pts.filter((p, i) => i === 0 || !near(p, pts[i - 1]));
+    if (kept.length > 1 && near(kept[kept.length - 1], kept[0])) kept.pop();
+    return kept;
+  };
+  // (x, y): the full square at the front face, inset by `c` behind the collar
+  const plan = dedupe([
+    [0, 0], [W, 0], [W - c, c], [W - c, D - c], [c, D - c], [c, c],
+  ]);
+  // (y, z): the same taper in z
+  const side = dedupe([
+    [0, 0], [c, c], [D - c, c], [D - c, H - c], [c, H - c], [0, H],
+  ]);
+  pushPolygonFlat(out, plan, 2, 0, [0, 0, -1]); // z=0
+  pushPolygonFlat(out, plan, 2, H, [0, 0, 1]); // z=H
+  pushPolygonFlat(out, side, 0, 0, [-1, 0, 0]); // x=0
+  pushPolygonFlat(out, side, 0, W, [1, 0, 0]); // x=W
   pushOriented(out, [[c, D, c], [c, D, H - c], [W - c, D, H - c], [W - c, D, c]], C); // y=D
 
-  // 4 vertical-edge chamfers (span z from c to H−c)
-  pushOriented(out, [[0, c, c], [c, 0, c], [c, 0, H - c], [0, c, H - c]], C);         // x+y=c
+  // back vertical-edge chamfers (span z from c to H−c)
   pushOriented(out, [[0, D - c, c], [0, D - c, H - c], [c, D, H - c], [c, D, c]], C); // x+(D−y)=c
-  pushOriented(out, [[W, c, c], [W, c, H - c], [W - c, 0, H - c], [W - c, 0, c]], C); // (W−x)+y=c
   pushOriented(out, [[W, D - c, c], [W - c, D, c], [W - c, D, H - c], [W, D - c, H - c]], C); // (W−x)+(D−y)=c
 
-  // 4 X-parallel edge chamfers (span x from c to W−c)
-  pushOriented(out, [[c, 0, c], [W - c, 0, c], [W - c, c, 0], [c, c, 0]], C);         // y+z=c  (front-bottom)
-  pushOriented(out, [[c, 0, H - c], [c, c, H], [W - c, c, H], [W - c, 0, H - c]], C); // y+(H−z)=c (front-top)
+  // 2 back X-parallel edge chamfers (span x from c to W−c)
   pushOriented(out, [[c, D - c, 0], [W - c, D - c, 0], [W - c, D, c], [c, D, c]], C); // (D−y)+z=c (back-bottom)
   pushOriented(out, [[c, D, H - c], [W - c, D, H - c], [W - c, D - c, H], [c, D - c, H]], C); // (D−y)+(H−z)=c
 
-  // 4 Y-parallel edge chamfers (span y from c to D−c)
+  // 4 Y-parallel (long-edge) chamfers (span y from c to D−c)
   pushOriented(out, [[0, c, c], [0, D - c, c], [c, D - c, 0], [c, c, 0]], C);         // x+z=c (left-bottom)
   pushOriented(out, [[0, c, H - c], [c, c, H], [c, D - c, H], [0, D - c, H - c]], C); // x+(H−z)=c (left-top)
   pushOriented(out, [[W, c, c], [W - c, c, 0], [W - c, D - c, 0], [W, D - c, c]], C); // (W−x)+z=c (right-bottom)
   pushOriented(out, [[W, c, H - c], [W, D - c, H - c], [W - c, D - c, H], [W - c, c, H]], C); // (W−x)+(H−z)=c
 
-  // 8 corner triangles (one per cube vertex)
+  // front collars: the bevel fades linearly to nothing at the front face, so the
+  // front face is a plain square and only the drawer fronts are chamfered there
+  pushFace(out, [[0, 0, 0], [0, c, c], [c, c, 0]], [-1, 1, -1]);     // x+z=y
+  pushFace(out, [[W, 0, 0], [W - c, c, 0], [W, c, c]], [1, 1, -1]);  // (W−x)+z=y
+  pushFace(out, [[0, 0, H], [c, c, H], [0, c, H - c]], [-1, 1, 1]);  // x+(H−z)=y
+  pushFace(out, [[W, 0, H], [W, c, H - c], [W - c, c, H]], [1, 1, 1]); // (W−x)+(H−z)=y
+
+  // 4 corner triangles (one per back vertex — the front corners are sharp)
   for (const cx of [0, W]) {
-    for (const cy of [0, D]) {
-      for (const cz of [0, H]) {
-        const ix = cx === 0 ? 1 : -1;
-        const iy = cy === 0 ? 1 : -1;
-        const iz = cz === 0 ? 1 : -1;
-        pushOriented(out, [
-          [cx, cy + iy * c, cz + iz * c],
-          [cx + ix * c, cy, cz + iz * c],
-          [cx + ix * c, cy + iy * c, cz],
-        ], C);
-      }
+    for (const cz of [0, H]) {
+      const ix = cx === 0 ? 1 : -1;
+      const iz = cz === 0 ? 1 : -1;
+      pushOriented(out, [
+        [cx, D - c, cz + iz * c],
+        [cx + ix * c, D, cz + iz * c],
+        [cx + ix * c, D - c, cz],
+      ], C);
     }
   }
 
-  // front face (y=0): outer rectangle with the pocket mouth as a hole
+  // front face (y=0): the full outer square with the pocket mouth as a hole
   pushRing(
     out,
-    [[c, c], [W - c, c], [W - c, H - c], [c, H - c]],
+    [[0, 0], [W, 0], [W, H], [0, H]],
     [[px0, pz0], [px0, pz1], [px1, pz1], [px1, pz0]],
     0,
     [0, -1, 0]
@@ -333,59 +393,445 @@ function buildChamferedCabinet(
 }
 
 /**
- * A drawer front panel: a rectangular prism (X 0..W, Y 0..depth, Z 0..height)
- * with its two front vertical corners cut by `c` — so when the drawer is closed
- * it continues the cube's front vertical chamfers.
+ * A dovetail groove (in a panel) or rib (on a tray wall). `neck`/`head` are the
+ * half-widths at the mouth and at the far end, `depth` the reach into the
+ * material. Both slide together along Z (the print's up axis), so every face
+ * stays vertical and prints support-free.
  */
-function buildDrawerPanel(W: number, depth: number, height: number, c: number): number[] {
-  const out: number[] = [];
-  const C: V3 = [W / 2, depth / 2, height / 2];
-  const sec: [number, number][] = [
-    [0, c], [0, depth], [W, depth], [W, c], [W - c, 0], [c, 0],
-  ];
-  pushOriented(out, sec.map(([x, y]) => [x, y, 0] as V3), C);
-  pushOriented(out, sec.map(([x, y]) => [x, y, height] as V3), C);
-  for (let i = 0; i < sec.length; i++) {
-    const a = sec[i];
-    const b = sec[(i + 1) % sec.length];
-    pushOriented(out, [
-      [a[0], a[1], 0], [b[0], b[1], 0], [b[0], b[1], height], [a[0], a[1], height],
-    ], C);
+interface Dovetail {
+  cx: number;
+  neck: number;
+  head: number;
+  depth: number;
+}
+
+/**
+ * Append a flat polygon (≥3 pts, optional holes) lying on a constant-`axis`
+ * plane, triangulated with earcut. `pts2D` is in the plane's other two axes:
+ * axis 0 → (y, z), axis 1 → (x, z), axis 2 → (x, y). Needed wherever a face is
+ * not convex (the cabinet's collar fans out to the full front square, so its
+ * bottom/top/left/right faces have a reflex corner) — a fan would overlap itself.
+ */
+function pushPolygonFlat(
+  out: number[],
+  pts2D: [number, number][],
+  axis: 0 | 1 | 2,
+  at: number,
+  dir: V3,
+  holes: [number, number][][] = []
+): void {
+  const flat: number[] = [];
+  for (const [u, v] of pts2D) flat.push(u, v);
+  const idx: number[] = [];
+  for (const h of holes) {
+    idx.push(flat.length / 2);
+    for (const [u, v] of h) flat.push(u, v);
+  }
+  const tris = earcut(flat, idx.length ? idx : undefined, 2);
+  const to3 = (u: number, v: number): V3 =>
+    axis === 0 ? [at, u, v] : axis === 1 ? [u, at, v] : [u, v, at];
+  for (let i = 0; i < tris.length; i += 3) {
+    const t: V3[] = [];
+    for (let k = 0; k < 3; k++) {
+      const j = tris[i + k] * 2;
+      t.push(to3(flat[j], flat[j + 1]));
+    }
+    pushFace(out, t, dir);
+  }
+}
+
+/** Append a flat polygon (≥3 pts, optional holes) at a constant z, oriented
+ *  along `dir`. */
+function pushPolygonZ(
+  out: number[],
+  pts2D: [number, number][],
+  z: number,
+  dir: V3,
+  holes: [number, number][][] = []
+): void {
+  pushPolygonFlat(out, pts2D, 2, z, dir, holes);
+}
+
+/** A flat-top regular hexagon (across-flats `a`) centred at (cx, cy). */
+function hexPoly(cx: number, cy: number, a: number): [number, number][] {
+  const r = a / Math.sqrt(3); // circumradius
+  const pts: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = (Math.PI / 3) * i; // flat-top: a vertex on the +x axis
+    pts.push([cx + r * Math.cos(ang), cy + r * Math.sin(ang)]);
+  }
+  return pts;
+}
+
+/** Honeycomb of hex holes filling a [0,w] × [0,h] area, inset by `margin`. */
+function hexHoles(
+  w: number,
+  h: number,
+  acrossFlats: number,
+  margin: number
+): [number, number][][] {
+  const a = Math.max(2.5, acrossFlats);
+  const web = Math.max(1.2, a * 0.22);
+  const pitch = a + web; // flat-to-flat centre spacing
+  const r = a / Math.sqrt(3);
+  const colStep = 1.5 * (pitch / Math.sqrt(3)); // flat-top column spacing
+  const out: [number, number][][] = [];
+  const x0 = margin + r;
+  const x1 = w - margin - r;
+  const y0 = margin + a / 2;
+  const y1 = h - margin - a / 2;
+  if (x1 <= x0 || y1 <= y0) return out;
+  let col = 0;
+  for (let cx = x0; cx <= x1 + 1e-9; cx += colStep, col++) {
+    const off = (col % 2) * (pitch / 2);
+    for (let cy = y0 + off; cy <= y1 + 1e-9; cy += pitch) {
+      out.push(hexPoly(cx, cy, a));
+    }
   }
   return out;
 }
 
 /**
- * A drawer tray: an open-top box (floor + 4 walls) with an exact footprint.
- * Explicit so it stays small (a heightfield would emit per-cell quads) — the
- * inner faces carry explicit inward normals via pushFace.
+ * Append a rectangular wall between two parallel planes, perforated with hex
+ * holes (`holes`, in the wall's (u, v) plane). `axis` is the wall normal: the
+ * plate spans [u0,u1] × [v0,v1] on the outer surface (coordinate `outerAt`) and
+ * [iu0,iu1] × [iv0,iv1] on the inner one (`innerAt`); `outDir` is the outward
+ * direction along `axis`. Holes must sit inside the inner rectangle.
  */
-function buildTray(W: number, D: number, H: number, wall: number, floor: number): number[] {
+function pushHoleyWall(
+  out: number[],
+  axis: 0 | 1 | 2,
+  outerAt: number,
+  innerAt: number,
+  outDir: number,
+  u0: number,
+  u1: number,
+  v0: number,
+  v1: number,
+  iu0: number,
+  iu1: number,
+  iv0: number,
+  iv1: number,
+  holes: [number, number][][]
+): void {
+  const to3 = (u: number, v: number, c: number): V3 =>
+    axis === 0 ? [c, u, v] : axis === 1 ? [u, c, v] : [u, v, c];
+  const nAxis: V3 = axis === 0 ? [outDir, 0, 0] : axis === 1 ? [0, outDir, 0] : [0, 0, outDir];
+  const nIn: V3 = [nAxis[0] * -1, nAxis[1] * -1, nAxis[2] * -1];
+
+  const face = (
+    at: number,
+    a0: number,
+    a1: number,
+    b0: number,
+    b1: number,
+    normal: V3
+  ) => {
+    const flat: number[] = [a0, b0, a1, b0, a1, b1, a0, b1];
+    const holeStarts: number[] = [];
+    for (const h of holes) {
+      holeStarts.push(flat.length / 2);
+      for (const [hu, hv] of h) flat.push(hu, hv);
+    }
+    const tris = earcut(flat, holeStarts.length ? holeStarts : undefined, 2);
+    for (let i = 0; i < tris.length; i += 3) {
+      const t: V3[] = [];
+      for (let k = 0; k < 3; k++) {
+        const j = tris[i + k] * 2;
+        t.push(to3(flat[j], flat[j + 1], at));
+      }
+      // keep zero-area tris: earcut emits them where collinear hole rings meet,
+      // and dropping them would leave holes in the mesh
+      pushFace(out, t, normal, true);
+    }
+  };
+
+  face(outerAt, u0, u1, v0, v1, nAxis);
+  face(innerAt, iu0, iu1, iv0, iv1, nIn);
+
+  // hole side walls
+  for (const h of holes) {
+    const cU = h.reduce((s, p) => s + p[0], 0) / h.length;
+    const cV = h.reduce((s, p) => s + p[1], 0) / h.length;
+    for (let i = 0; i < h.length; i++) {
+      const p = h[i];
+      const q = h[(i + 1) % h.length];
+      const mU = (p[0] + q[0]) / 2 - cU;
+      const mV = (p[1] + q[1]) / 2 - cV;
+      const nl = Math.hypot(mU, mV) || 1;
+      const dir: V3 =
+        axis === 0
+          ? [0, mU / nl, mV / nl]
+          : axis === 1
+            ? [mU / nl, 0, mV / nl]
+            : [mU / nl, mV / nl, 0];
+      pushFace(
+        out,
+        [to3(p[0], p[1], outerAt), to3(q[0], q[1], outerAt), to3(q[0], q[1], innerAt), to3(p[0], p[1], innerAt)],
+        dir
+      );
+    }
+  }
+}
+
+/**
+ * A drawer front panel: a rectangular prism (X 0..W, Y 0..depth, Z 0..height)
+ * with its two front vertical corners cut by `c` — so when the drawer is closed
+ * it continues the cube's front vertical chamfers. Its back (y = depth) carries
+ * one or more dovetail GROOVES (`grooves`), open at both ends, that the tray's
+ * matching dovetail ribs slide into.
+ */
+function buildDrawerPanel(
+  W: number,
+  depth: number,
+  height: number,
+  c: number,
+  grooves: Dovetail[]
+): number[] {
   const out: number[] = [];
-  const ix0 = wall, ix1 = W - wall, iy0 = wall, iy1 = D - wall, iz0 = floor;
-  pushFace(out, [[0, 0, 0], [0, D, 0], [W, D, 0], [W, 0, 0]], [0, 0, -1]); // bottom
-  pushFace(out, [[0, 0, 0], [W, 0, 0], [W, 0, H], [0, 0, H]], [0, -1, 0]); // front
-  pushFace(out, [[0, D, 0], [0, D, H], [W, D, H], [W, D, 0]], [0, 1, 0]); // back
-  pushFace(out, [[0, 0, 0], [0, 0, H], [0, D, H], [0, D, 0]], [-1, 0, 0]); // left
-  pushFace(out, [[W, 0, 0], [W, D, 0], [W, D, H], [W, 0, H]], [1, 0, 0]); // right
-  // top rim: outer rectangle minus the cavity
-  pushRingZ(out, [[0, 0], [W, 0], [W, D], [0, D]], [[ix0, iy0], [ix0, iy1], [ix1, iy1], [ix1, iy0]], H, [0, 0, 1]);
-  // inner walls (normals point into the cavity)
-  pushFace(out, [[ix0, iy0, iz0], [ix0, iy0, H], [ix0, iy1, H], [ix0, iy1, iz0]], [1, 0, 0]); // inner left
-  pushFace(out, [[ix1, iy0, iz0], [ix1, iy1, iz0], [ix1, iy1, H], [ix1, iy0, H]], [-1, 0, 0]); // inner right
-  pushFace(out, [[ix0, iy0, iz0], [ix1, iy0, iz0], [ix1, iy0, H], [ix0, iy0, H]], [0, 1, 0]); // inner front
-  pushFace(out, [[ix0, iy1, iz0], [ix0, iy1, H], [ix1, iy1, H], [ix1, iy1, iz0]], [0, -1, 0]); // inner back
-  pushFace(out, [[ix0, iy0, iz0], [ix1, iy0, iz0], [ix1, iy1, iz0], [ix0, iy1, iz0]], [0, 0, 1]); // inner floor
+  const sec: [number, number][] = [[0, c], [0, depth]];
+  for (const g of [...grooves].sort((a, b) => a.cx - b.cx)) {
+    sec.push([g.cx - g.neck, depth]);
+    sec.push([g.cx - g.head, depth - g.depth]);
+    sec.push([g.cx + g.head, depth - g.depth]);
+    sec.push([g.cx + g.neck, depth]);
+  }
+  sec.push([W, depth], [W, c], [W - c, 0], [c, 0]);
+  // caps use earcut: the section is no longer convex once it has keyholes
+  pushPolygonZ(out, sec, 0, [0, 0, -1]);
+  pushPolygonZ(out, sec, height, [0, 0, 1]);
+  // Side walls: the winding comes from the section itself. `pushOriented`'s
+  // interior-point guess cannot be used here — a groove's floor sits at
+  // `depth - g.depth`, which for `dvDepth = frontThk / 2` is exactly the panel's
+  // mid-plane, i.e. it contains C, so the dot product is 0 and the inward
+  // winding would survive making the groove render see-through.
+  let area2 = 0;
+  for (let i = 0; i < sec.length; i++) {
+    const a = sec[i];
+    const b = sec[(i + 1) % sec.length];
+    area2 += a[0] * b[1] - b[0] * a[1];
+  }
+  const ccw = area2 > 0; // +1 = counter-clockwise section (in the x/y plane)
+  for (let i = 0; i < sec.length; i++) {
+    const a = sec[i];
+    const b = sec[(i + 1) % sec.length];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    // for a CCW section the outward normal of edge a→b is (dy, −dx)
+    pushFace(
+      out,
+      [
+        [a[0], a[1], 0],
+        [b[0], b[1], 0],
+        [b[0], b[1], height],
+        [a[0], a[1], height],
+      ],
+      ccw ? [dy, -dx, 0] : [-dy, dx, 0]
+    );
+  }
+  return out;
+}
+
+/**
+ * A drawer tray: an open-top box with an **open front** — a floor plus left,
+ * right and back walls only (the front panel closes the drawer). Each side
+ * wall's exposed front end is cut into a vertical dovetail TENON (`neck`/`head`
+ * are half-widths at the end face and at the tip, `depth` the reach forward),
+ * which slides into the front panel's matching groove. The three walls are
+ * solid or perforated with a hex honeycomb (`hex`, `hexMm` = hole size), to save
+ * filament. Built as one explicit closed solid (few triangles; a heightfield
+ * would emit per-cell quads).
+ */
+function buildTray(
+  W: number,
+  D: number,
+  H: number,
+  wall: number,
+  floor: number,
+  neck: number,
+  head: number,
+  depth: number,
+  hex: boolean,
+  hexMm: number
+): number[] {
+  const out: number[] = [];
+  const ix0 = wall,
+    ix1 = W - wall,
+    iy1 = D - wall,
+    iz0 = floor;
+  const cxL = wall / 2,
+    cxR = W - wall / 2;
+
+  // ---- the front (y = 0): the dovetail tenon at each side wall's end, the
+  // floor's front edge below the open front, and the walls' exposed ends above
+  // it. All split at z = floor (and at the cavity corners) so every edge is
+  // shared by exactly two faces.
+  const tenonSegs: [number, number, number, number][] = [
+    [cxL - neck, 0, cxL - head, -depth],
+    [cxL - head, -depth, cxL + head, -depth],
+    [cxL + head, -depth, cxL + neck, 0],
+    [cxR - neck, 0, cxR - head, -depth],
+    [cxR - head, -depth, cxR + head, -depth],
+    [cxR + head, -depth, cxR + neck, 0],
+  ];
+  for (const [x0, y0, x1, y1] of tenonSegs) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const nl = Math.hypot(dx, dy) || 1;
+    const n: V3 = [dy / nl, -dx / nl, 0];
+    for (const [za, zb] of [
+      [0, iz0],
+      [iz0, H],
+    ]) {
+      pushFace(out, [[x0, y0, za], [x1, y1, za], [x1, y1, zb], [x0, y0, zb]], n);
+    }
+  }
+  const frontFaces: [number, number, number, number][] = [
+    [0, cxL - neck, 0, iz0],
+    [cxL + neck, ix0, 0, iz0],
+    [ix0, ix1, 0, iz0],
+    [ix1, cxR - neck, 0, iz0],
+    [cxR + neck, W, 0, iz0],
+    [0, cxL - neck, iz0, H],
+    [cxL + neck, ix0, iz0, H],
+    [ix1, cxR - neck, iz0, H],
+    [cxR + neck, W, iz0, H],
+  ];
+  for (const [x0, x1, z0, z1] of frontFaces) {
+    if (x1 - x0 <= 1e-9 || z1 - z0 <= 1e-9) continue;
+    pushFace(out, [[x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1]], [0, -1, 0]);
+  }
+
+  // ---- the walls: the floor's side (z 0..floor), then the wall above it (plain,
+  // or a hex honeycomb through it). Split at the floor so the front faces' edges
+  // line up.
+  const margin = Math.max(2, hexMm * 0.35);
+  const shift = (
+    holes: [number, number][][],
+    du: number,
+    dv: number
+  ): [number, number][][] =>
+    holes.map((hp) => hp.map(([u, v]) => [u + du, v + dv] as [number, number]));
+  const sideHoles = hex
+    ? shift(hexHoles(iy1, H - iz0, hexMm, margin), 0, iz0)
+    : [];
+  const backHoles = hex
+    ? shift(hexHoles(ix1 - ix0, H - iz0, hexMm, margin), ix0, iz0)
+    : [];
+
+  // left / right walls, split at the floor
+  for (const side of [1, -1]) {
+    const x = side > 0 ? W : 0;
+    const inner = side > 0 ? W - wall : wall;
+    pushFace(
+      out,
+      [
+        [x, 0, 0],
+        [x, D, 0],
+        [x, D, iz0],
+        [x, 0, iz0],
+      ],
+      [side, 0, 0]
+    );
+    if (sideHoles.length) {
+      // (u, v) = (y, z)
+      pushHoleyWall(out, 0, x, inner, side, 0, D, iz0, H, 0, iy1, iz0, H, sideHoles);
+    } else {
+      pushFace(
+        out,
+        [
+          [x, 0, iz0],
+          [x, D, iz0],
+          [x, D, H],
+          [x, 0, H],
+        ],
+        [side, 0, 0]
+      );
+    }
+  }
+  // back wall, split at the floor
+  pushFace(
+    out,
+    [
+      [0, D, 0],
+      [0, D, iz0],
+      [W, D, iz0],
+      [W, D, 0],
+    ],
+    [0, 1, 0]
+  );
+  if (backHoles.length) {
+    // (u, v) = (x, z)
+    pushHoleyWall(out, 1, D, iy1, 1, 0, W, iz0, H, ix0, ix1, iz0, H, backHoles);
+  } else {
+    pushFace(
+      out,
+      [
+        [0, D, iz0],
+        [0, D, H],
+        [W, D, H],
+        [W, D, iz0],
+      ],
+      [0, 1, 0]
+    );
+  }
+
+  // ---- bottom (full footprint) and the wall tops (open front => a U) ----
+  const plan: [number, number][] = [
+    [0, 0],
+    [cxL - neck, 0],
+    [cxL - head, -depth],
+    [cxL + head, -depth],
+    [cxL + neck, 0],
+    [ix0, 0],
+    [ix1, 0],
+    [cxR - neck, 0],
+    [cxR - head, -depth],
+    [cxR + head, -depth],
+    [cxR + neck, 0],
+    [W, 0],
+    [W, D],
+    [0, D],
+  ];
+  const rim: [number, number][] = [
+    [0, 0],
+    [cxL - neck, 0],
+    [cxL - head, -depth],
+    [cxL + head, -depth],
+    [cxL + neck, 0],
+    [ix0, 0],
+    [ix0, iy1],
+    [ix1, iy1],
+    [ix1, 0],
+    [cxR - neck, 0],
+    [cxR - head, -depth],
+    [cxR + head, -depth],
+    [cxR + neck, 0],
+    [W, 0],
+    [W, D],
+    [0, D],
+  ];
+  pushPolygonZ(out, plan, 0, [0, 0, -1]);
+  pushPolygonZ(out, rim, H, [0, 0, 1]);
+
+  // ---- cavity walls + floor (the front is open down to y = 0) ----
+  if (!sideHoles.length) {
+    pushFace(out, [[ix0, 0, iz0], [ix0, iy1, iz0], [ix0, iy1, H], [ix0, 0, H]], [1, 0, 0]); // inner left
+    pushFace(out, [[ix1, 0, iz0], [ix1, 0, H], [ix1, iy1, H], [ix1, iy1, iz0]], [-1, 0, 0]); // inner right
+  }
+  if (!backHoles.length) {
+    pushFace(out, [[ix0, iy1, iz0], [ix0, iy1, H], [ix1, iy1, H], [ix1, iy1, iz0]], [0, -1, 0]); // inner back
+  }
+  pushFace(out, [[ix0, 0, iz0], [ix1, 0, iz0], [ix1, iy1, iz0], [ix0, iy1, iz0]], [0, 0, 1]); // cavity floor
   return out;
 }
 
 
-/** Inside the cabinet's chamfered footprint (rectangle with corners cut by c). */
+/** Inside the cabinet's footprint: the bevels fade out, so the front is square. */
 function insideOct(x: number, y: number, W: number, D: number, c: number): boolean {
   if (x < 0 || x > W || y < 0 || y > D) return false;
   if (c > 0) {
-    if (x + y < c) return false;
-    if (W - x + y < c) return false;
+    // only the back corners are cut — the bevels ramp in from the front face
     if (x + (D - y) < c) return false;
     if (W - x + (D - y) < c) return false;
   }
@@ -440,63 +886,181 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   const pz0 = floorThk;
   const pz1 = H - roofThk;
 
-  // ---- cabinet: one explicit chamfered solid with a front pocket ----
-  const cabinetPositions = buildChamferedCabinet(W, D, H, c, px0, px1, py1, pz0, pz1);
+  // Print orientation: the cube lies on its back, so its back face rests on the
+  // bed and the opening faces up. The roof / floor become vertical walls and the
+  // shelf rails stand on edge, so nothing bridges over the cavity. The drawers
+  // print in their own (flat) orientation beside it. (x, y, z) -> (x, z, D − y).
+  const orient = (arr: number[]): number[] => {
+    const out = new Array<number>(arr.length);
+    for (let i = 0; i < arr.length; i += 3) {
+      out[i] = arr[i];
+      out[i + 1] = arr[i + 2];
+      out[i + 2] = D - arr[i + 1];
+    }
+    return out;
+  };
+
+  // ---- cabinet: one explicit chamfered solid with a front pocket. The soup is
+  // kept in the model's own space (x = width, y = depth, z = height) so the
+  // assembled preview can drop the drawers into it; the printed part rotates it.
+  const cabinetSoup = buildChamferedCabinet(W, D, H, c, px0, px1, py1, pz0, pz1);
 
   const parts: DrawersPart[] = [
-    { name: "Cabinet", color: input.color, positions: cabinetPositions },
+    { name: "Cabinet", color: input.color, positions: orient(cabinetSoup) },
   ];
 
   // ---- shelves: exact boxes (disjoint -> one watertight part) ----
   const interiorH = Math.max(N + 1, pz1 - pz0 - (N - 1) * shelfThk);
   const ch = interiorH / N;
-  const frontH = Math.max(trayFloor + 1, ch - gap);
+  /** Height of one drawer *tray* — it has to fit its compartment. */
+  const trayH = Math.max(trayFloor + 1, ch - gap);
+  /**
+   * Z range of the *front panel* for drawer `k`. Panels are cut to their
+   * compartment plus half of each dividing shelf, so consecutive fronts almost
+   * touch (only `gap` between them) and the outermost ones run out to the
+   * cabinet's bottom and top faces — the closed chest shows panels, not cabinet.
+   */
+  const frontZ = (k: number): [number, number] => {
+    const shelfMid = (j: number): number =>
+      j < 0 ? 0 : j >= N - 1 ? H : pz0 + j * (ch + shelfThk) + ch + shelfThk / 2;
+    const lo = shelfMid(k - 1) + (k > 0 ? gap / 2 : 0);
+    const hi = shelfMid(k) - (k < N - 1 ? gap / 2 : 0);
+    return [lo, Math.max(lo + 1, hi)];
+  };
   if (N > 1) {
     const overlap = Math.min(wall, 0.6);
+    // Each shelf is two side rails rather than a full slab: the drawer tray
+    // rests on them and the middle of the compartment stays open (far less
+    // filament). Clamped so the two rails never meet in the middle.
+    const rail = clamp(
+      input.shelfRailMm,
+      pixelSize,
+      Math.max(pixelSize, (px1 - px0) / 2 - 0.5)
+    );
     const shelfSoup: number[] = [];
     for (let k = 0; k < N - 1; k++) {
       const z0 = pz0 + k * (ch + shelfThk) + ch;
-      pushBox(shelfSoup, px0 - overlap, px1 + overlap, 0, py1 + overlap, z0, z0 + shelfThk);
+      pushBox(shelfSoup, px0 - overlap, px0 + rail, 0, py1 + overlap, z0, z0 + shelfThk);
+      pushBox(shelfSoup, px1 - rail, px1 + overlap, 0, py1 + overlap, z0, z0 + shelfThk);
     }
-    parts.push({ name: "Shelves", color: input.color, positions: shelfSoup });
+    // The shelves are the same colour as the cabinet, so they are welded into
+    // its mesh (overlapping the walls) rather than exported as their own object.
+    for (const v of shelfSoup) cabinetSoup.push(v);
+    parts[0].positions = orient(cabinetSoup);
   }
 
-  // ---- drawers: explicit full-width front panel + explicit tray ----
+  // ---- drawers: a separate full-width front + an open tray, joined by a
+  // dovetail (fronts and trays print as their own parts, one colour each) ----
   const openingW = px1 - px0;
   const openingD = py1;
   const trayW = Math.max(pixelSize, openingW - 2 * fit);
   const trayD = Math.max(pixelSize, openingD - fit);
-  const panelPts = buildDrawerPanel(W, frontThk, frontH, c);
-
-  const ov = Math.min(0.8, frontThk * 0.4); // panel/tray overlap (watertight union)
-  const drawerDmm = frontThk + trayD;
-  // tray centred under the flush panel, sitting just behind it (exact, few tris)
-  const trayLocal = buildTray(trayW, trayD, frontH, trayWall, trayFloor);
   const tx = (W - trayW) / 2;
-  const ty = frontThk - ov;
-  for (let i = 0; i < trayLocal.length; i += 3) {
-    trayLocal[i] += tx;
-    trayLocal[i + 1] += ty;
-  }
 
-  const drawerParts: DrawersPart[] = [];
+  // Dovetail: each side wall's exposed front end is cut into a vertical dovetail
+  // tenon — narrow at the wall's end face, flared back at the tip — and the
+  // front panel's back carries the matching groove. Both run along Z (the
+  // print's up axis), so every joint face is vertical and prints support-free;
+  // `dvClr` (the drawer fit clearance) lets them slide together after printing.
+  const dvDepth = clamp(frontThk * 0.5, 1.2, 3); // tenon groove depth in the panel
+  const dvClr = Math.max(0.3, fit);
+  const half = trayWall / 2;
+  const tenonNeck = Math.max(0.25, half - Math.min(0.8, half * 0.5));
+  const tenonHead = Math.max(tenonNeck + 0.25, half - Math.min(0.25, half * 0.15));
+  const dvFlare = tenonHead - tenonNeck;
+  // the groove is the tenon's trapezoid offset outward by `dvClr` (parallel
+  // flanks), so it can never bind on the way in
+  const gMouth = tenonNeck + (dvFlare * dvClr) / dvDepth + dvClr;
+  const gBase = gMouth + dvFlare;
+  const cxL = trayWall / 2;
+  const cxR = trayW - trayWall / 2;
+  const grooves: Dovetail[] = [
+    { cx: tx + cxL, neck: gMouth, head: gBase, depth: dvDepth },
+    { cx: tx + cxR, neck: gMouth, head: gBase, depth: dvDepth },
+  ];
+
+  const hexOn = input.trayWallStyle === "hex";
+  const trayLocal = buildTray(
+    trayW,
+    trayD,
+    trayH,
+    trayWall,
+    trayFloor,
+    tenonNeck,
+    tenonHead,
+    dvDepth,
+    hexOn,
+    input.hexMm
+  );
+
+  const drawerDmm = Math.max(frontThk, trayD + dvDepth) + 1;
+  const frontParts: DrawersPart[] = [];
+  const trayParts: DrawersPart[] = [];
+  // assembled pose, for the second preview: every drawer pushed home. A panel's
+  // local frame has its front at y = 0 and its back at y = frontThk, so shifting
+  // it back by `frontThk` lands its back on the cabinet's front face (y = 0) with
+  // the grooves straddling that compartment's tenons; the tray (local y = 0 is
+  // the wall end face, its tenons reaching to y = -dvDepth) then slides straight
+  // in behind it, centred on the opening by `tx` and sat on the compartment floor.
+  const assembledParts: DrawersPart[] = [
+    { name: "Cabinet", color: input.color, positions: cabinetSoup.slice() },
+  ];
   for (let k = 0; k < N; k++) {
-    const positions = panelPts.slice();
-    for (let i = 0; i < trayLocal.length; i++) positions.push(trayLocal[i]);
-    // lay the drawers out in a column to the right of the cabinet
-    const dx = W + LAYOUT_GAP;
+    const [fz0, fz1] = frontZ(k);
+    const panelLocal = buildDrawerPanel(W, frontThk, fz1 - fz0, c, grooves);
     const dy = k * (drawerDmm + LAYOUT_GAP);
-    for (let i = 0; i < positions.length; i += 3) {
-      positions[i] += dx;
-      positions[i + 1] += dy;
+    // fronts in one column beside the cabinet, their trays in the next column
+    const fPos = panelLocal.slice();
+    for (let i = 0; i < fPos.length; i += 3) {
+      fPos[i] += W + LAYOUT_GAP;
+      fPos[i + 1] += dy;
     }
-    drawerParts.push({
-      name: N > 1 ? `Drawer ${k + 1}` : "Drawer",
+    frontParts.push({
+      name: N > 1 ? `Front ${k + 1}` : "Front",
+      color: input.frontColor,
+      positions: fPos,
+    });
+    const tPos = trayLocal.slice();
+    for (let i = 0; i < tPos.length; i += 3) {
+      tPos[i] += 2 * W + 2 * LAYOUT_GAP;
+      tPos[i + 1] += dy;
+    }
+    trayParts.push({
+      name: N > 1 ? `Tray ${k + 1}` : "Tray",
       color: input.drawerColor,
-      positions,
+      positions: tPos,
+    });
+
+    const aPos = panelLocal.slice();
+    for (let i = 0; i < aPos.length; i += 3) {
+      aPos[i + 1] -= frontThk;
+      aPos[i + 2] += fz0;
+    }
+    assembledParts.push({
+      name: N > 1 ? `Front ${k + 1}` : "Front",
+      color: input.frontColor,
+      positions: aPos,
+    });
+    const aTray = trayLocal.slice();
+    for (let i = 0; i < aTray.length; i += 3) {
+      aTray[i] += tx;
+      aTray[i + 2] += pz0 + k * (ch + shelfThk);
+    }
+    assembledParts.push({
+      name: N > 1 ? `Tray ${k + 1}` : "Tray",
+      color: input.drawerColor,
+      positions: aTray,
     });
   }
-  parts.push(...drawerParts);
+  parts.push(...frontParts, ...trayParts);
+  // `openMm` is how far the assembled preview slides a drawer forward when it
+  // animates them open: most of the tray comes out (so you can see inside), but
+  // the back of the tray stays in the cavity so it still reads as one object.
+  const assembled = {
+    parts: assembledParts,
+    openMm: trayD * 0.75,
+    ...modelBounds(assembledParts),
+  };
 
   const { bboxMm, centerMm } = modelBounds(parts);
   const triangleCount = parts.reduce((s, p) => s + p.positions.length, 0) / 9;
@@ -567,6 +1131,7 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
 
   return {
     parts,
+    assembled,
     gw,
     gh,
     pixelSizeMm: pixelSize,

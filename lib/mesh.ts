@@ -206,6 +206,355 @@ export function buildHeightfieldGeometry(
 }
 
 /**
+ * Manifold heightfield mesh with the same topology, winding and z-cut handling
+ * as `buildHeightfieldGeometry`, but with grid vertices optionally snapped onto
+ * smooth shape contours. `snapAt(px, py)` receives a grid vertex in pixel
+ * coordinates (x right, y down; corners on integers) and returns the snapped
+ * pixel coordinates, or null to leave the vertex on the grid.
+ *
+ * Snapping is a pure function of the vertex's coordinates, so a vertex shared
+ * by several triangles always lands on the same point — shared edges stay
+ * welded and the mesh stays watertight. `shapeContourSnapper` never moves a
+ * vertex more than half a cell, so adjacent corners cannot cross and every
+ * quad stays non-degenerate. Curved outlines (circle, hexagon, heart, ...)
+ * then come out as true arcs/curves instead of a pixel staircase.
+ */
+export function buildSnappedHeightfieldGeometry(
+  z0s: Float32Array | number[],
+  z1s: Float32Array | number[],
+  gw: number,
+  gh: number,
+  pixelSize: number,
+  snapAt?: ((px: number, py: number) => [number, number] | null) | null
+): TriangleSoup {
+  const out: TriangleSoup = [];
+  const s = pixelSize;
+  const n = gw * gh;
+  const at = (x: number, y: number): number =>
+    x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x;
+  const solid = (i: number): boolean => i >= 0 && z1s[i] > z0s[i] + 1e-9;
+
+  // Global sorted z cuts (every z0/z1 in the part), matching the unsnapped
+  // builder: side faces split at these levels so vertical mesh edges stay
+  // consistently segmented (no T-junctions between perpendicular faces).
+  const cutSet = new Set<number>();
+  for (let i = 0; i < n; i++) {
+    if (z1s[i] > z0s[i] + 1e-9) {
+      cutSet.add(z0s[i]);
+      cutSet.add(z1s[i]);
+    }
+  }
+  const cuts = [...cutSet].sort((a, b) => a - b);
+
+  // Grid vertex positions, optionally snapped. Vertex (gx, gy) sits at world
+  // x = gx*s, y = (gh - gy)*s (image row 0 -> max Y); pixel coords are (gx, gy).
+  const vw = gw + 1;
+  const vX = new Float64Array(vw * (gh + 1));
+  const vY = new Float64Array(vw * (gh + 1));
+  for (let gy = 0; gy <= gh; gy++) {
+    for (let gx = 0; gx <= gw; gx++) {
+      let px = gx;
+      let py = gy;
+      if (snapAt) {
+        const r = snapAt(gx, gy);
+        if (r) {
+          px = r[0];
+          py = r[1];
+        }
+      }
+      const vi = gy * vw + gx;
+      vX[vi] = px * s;
+      vY[vi] = (gh - py) * s;
+    }
+  }
+  const VX = (gx: number, gy: number): number => vX[gy * vw + gx];
+  const VY = (gx: number, gy: number): number => vY[gy * vw + gx];
+
+  // top + bottom faces
+  for (let y = 0; y < gh; y++) {
+    for (let x = 0; x < gw; x++) {
+      const i = at(x, y);
+      if (!solid(i)) continue;
+      const z0 = z0s[i];
+      const z1 = z1s[i];
+      const bLx = VX(x, y + 1), bLy = VY(x, y + 1);
+      const bRx = VX(x + 1, y + 1), bRy = VY(x + 1, y + 1);
+      const tRx = VX(x + 1, y), tRy = VY(x + 1, y);
+      const tLx = VX(x, y), tLy = VY(x, y);
+      // top (+Z)
+      pushTri(out, bLx, bLy, z1, bRx, bRy, z1, tRx, tRy, z1);
+      pushTri(out, bLx, bLy, z1, tRx, tRy, z1, tLx, tLy, z1);
+      // bottom (-Z)
+      pushTri(out, bLx, bLy, z0, tLx, tLy, z0, tRx, tRy, z0);
+      pushTri(out, bLx, bLy, z0, tRx, tRy, z0, bRx, bRy, z0);
+    }
+  }
+
+  // First cut index whose strip [cuts[c], cuts[c+1]] can overlap [lo, hi].
+  const cutStart = (lo: number): number => {
+    let a = 0,
+      b = cuts.length - 2,
+      ans = -1;
+    while (a <= b) {
+      const m = (a + b) >> 1;
+      if (cuts[m + 1] > lo) {
+        ans = m;
+        b = m - 1;
+      } else a = m + 1;
+    }
+    return ans;
+  };
+
+  // For a boundary between cell intervals [a0,a1] and [b0,b1] (empty cell = no
+  // interval), call emitA/emitB for each strip solid in exactly one cell.
+  const emitStrips = (
+    aSolid: boolean,
+    a0: number,
+    a1: number,
+    bSolid: boolean,
+    b0: number,
+    b1: number,
+    emitA: (lo: number, hi: number) => void,
+    emitB: (lo: number, hi: number) => void
+  ) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    if (aSolid) {
+      if (a0 < lo) lo = a0;
+      if (a1 > hi) hi = a1;
+    }
+    if (bSolid) {
+      if (b0 < lo) lo = b0;
+      if (b1 > hi) hi = b1;
+    }
+    if (lo >= hi) return;
+    let c = cutStart(lo);
+    if (c < 0) return;
+    for (; c + 1 < cuts.length && cuts[c] < hi; c++) {
+      const clo = cuts[c],
+        chi = cuts[c + 1];
+      const mid = (clo + chi) / 2;
+      const inA = aSolid && a0 < mid && mid < a1;
+      const inB = bSolid && b0 < mid && mid < b1;
+      if (inA === inB) continue;
+      if (inA) emitA(clo, chi);
+      else emitB(clo, chi);
+    }
+  };
+
+  // side faces on east-west boundaries (vertical plane through column xe)
+  for (let y = 0; y < gh; y++) {
+    for (let xe = 0; xe <= gw; xe++) {
+      const a = at(xe - 1, y); // west cell
+      const b = at(xe, y); // east cell
+      const fa = solid(a),
+        fb = solid(b);
+      if (!fa && !fb) continue;
+      const bx = VX(xe, y + 1), by = VY(xe, y + 1); // bottom corner
+      const tx = VX(xe, y), ty = VY(xe, y); // top corner
+      emitStrips(
+        fa,
+        fa ? z0s[a] : 0,
+        fa ? z1s[a] : 0,
+        fb,
+        fb ? z0s[b] : 0,
+        fb ? z1s[b] : 0,
+        // strip solid only in A -> east face of the west cell (+X normal)
+        (lo, hi) => {
+          pushTri(out, bx, by, lo, tx, ty, lo, tx, ty, hi);
+          pushTri(out, bx, by, lo, tx, ty, hi, bx, by, hi);
+        },
+        // strip solid only in B -> west face of the east cell (-X normal)
+        (lo, hi) => {
+          pushTri(out, bx, by, lo, tx, ty, hi, tx, ty, lo);
+          pushTri(out, bx, by, lo, bx, by, hi, tx, ty, hi);
+        }
+      );
+    }
+  }
+
+  // side faces on north-south boundaries (horizontal plane through row b)
+  for (let b = 0; b <= gh; b++) {
+    for (let x = 0; x < gw; x++) {
+      const a = at(x, b - 1); // north cell (higher world Y)
+      const c = at(x, b); // south cell
+      const fa = solid(a),
+        fc = solid(c);
+      if (!fa && !fc) continue;
+      const lx = VX(x, b), ly = VY(x, b);
+      const rx = VX(x + 1, b), ry = VY(x + 1, b);
+      emitStrips(
+        fa,
+        fa ? z0s[a] : 0,
+        fa ? z1s[a] : 0,
+        fc,
+        fc ? z0s[c] : 0,
+        fc ? z1s[c] : 0,
+        // strip solid only in A -> south face of the north cell (-Y normal)
+        (lo, hi) => {
+          pushTri(out, lx, ly, lo, rx, ry, lo, rx, ry, hi);
+          pushTri(out, lx, ly, lo, rx, ry, hi, lx, ly, hi);
+        },
+        // strip solid only in C -> north face of the south cell (+Y normal)
+        (lo, hi) => {
+          pushTri(out, lx, ly, lo, rx, ry, hi, rx, ry, lo);
+          pushTri(out, lx, ly, lo, lx, ly, hi, rx, ry, hi);
+        }
+      );
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Build a heightfield vertex-snap function that pulls grid vertices onto the
+ * contours of a shape silhouette at the given signed-distance thresholds
+ * (pixel units, positive inside the shape). A vertex inside `accept` pixels of
+ * the nearest contour is slid along the boundary normal toward it; a vertex
+ * farther than that is left on the grid (null).
+ *
+ * The move is capped at `maxMove` pixels (default 0.45 of a cell), so two
+ * adjacent grid corners (one cell apart) can never cross and no quad is
+ * collapsed — the mesh stays watertight while curved outlines become true
+ * lines/arcs instead of pixel staircases. Thresholds may be positive (an
+ * inward offset of the shape) or negative (an outward offset).
+ */
+export function shapeContourSnapper(
+  sil: ShapeSilhouette,
+  thresholds: number[],
+  maxMove = 0.45
+): (px: number, py: number) => [number, number] | null {
+  const accept = 0.75; // look for a contour within ~3/4 of a cell
+  return (px: number, py: number) => {
+    const [qx, qy] = sil.project(px, py);
+    const dx = px - qx;
+    const dy = py - qy;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-9) return null; // already on the boundary
+    const inside = sil.inside(px, py);
+    const sd = inside ? d : -d;
+    let best: number | null = null;
+    let bestDiff = accept;
+    for (const t of thresholds) {
+      const diff = Math.abs(sd - t);
+      if (diff <= bestDiff) {
+        bestDiff = diff;
+        best = t;
+      }
+    }
+    if (best === null) return null;
+    // Unit vector from the boundary point toward the interior; p = q + sd*u,
+    // so stepping it by the (clamped) signed gap t-sd lands on the contour.
+    const ux = inside ? dx / d : -dx / d;
+    const uy = inside ? dy / d : -dy / d;
+    const step = Math.max(-maxMove, Math.min(maxMove, best - sd));
+    if (Math.abs(step) < 1e-9) return null;
+    return [px + ux * step, py + uy * step];
+  };
+}
+
+/**
+ * Straddle-gated contour snapper: like `shapeContourSnapper`, but a vertex is
+ * only moved when the contour genuinely passes through it. `sd` is the per-cell
+ * signed distance (cells, + inside) used to decide whether a threshold lies
+ * between the vertex's incident cells (`lo < t < hi`); a vertex whose cells are
+ * all on one side is left alone, so interior faces are never distorted.
+ *
+ * Straddling vertices move the whole way to the contour (not a half-cell cap),
+ * so a curved outline becomes a clean polygon — the wall then reads as a true
+ * cylinder instead of a pixel staircase. A deterministic guard reverts a vertex
+ * that would land on a snapped grid-neighbour (sharp corners), keeping the
+ * mesh watertight. Returns a lookup over integer grid vertices in pixel coords.
+ */
+export function makeContourSnapper(
+  sil: ShapeSilhouette,
+  sd: Float32Array | number[],
+  gw: number,
+  gh: number,
+  thresholds: number[]
+): (gx: number, gy: number) => [number, number] | null {
+  const w = gw + 1;
+  const rawX = new Float64Array(w * (gh + 1));
+  const rawY = new Float64Array(w * (gh + 1));
+  const has = new Uint8Array(w * (gh + 1));
+  const OUTSIDE = -1e9; // cells beyond the grid are empty space
+  for (let gy = 0; gy <= gh; gy++) {
+    for (let gx = 0; gx <= gw; gx++) {
+      // signed-distance span of the (up to 4) incident cells
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let dy = -1; dy <= 0; dy++) {
+        for (let dx = -1; dx <= 0; dx++) {
+          const cx = gx + dx;
+          const cy = gy + dy;
+          const v =
+            cx < 0 || cy < 0 || cx >= gw || cy >= gh ? OUTSIDE : sd[cy * gw + cx];
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+      if (lo === Infinity) continue;
+      const px = gx;
+      const py = gy;
+      const [qx, qy] = sil.project(px, py);
+      const dx = px - qx;
+      const dy = py - qy;
+      const d = Math.hypot(dx, dy);
+      const inside = sil.inside(px, py);
+      const sv = inside ? d : -d;
+      // nearest threshold that actually crosses this vertex
+      let best: number | null = null;
+      let bestDiff = 2.1;
+      for (const t of thresholds) {
+        if (t <= lo || t >= hi) continue;
+        const diff = Math.abs(sv - t);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          best = t;
+        }
+      }
+      if (best === null) continue;
+      const vi = gy * w + gx;
+      if (d < 1e-9) {
+        rawX[vi] = qx;
+        rawY[vi] = qy;
+      } else {
+        const ux = inside ? dx / d : -dx / d;
+        const uy = inside ? dy / d : -dy / d;
+        const step = best - sv;
+        rawX[vi] = px + ux * step;
+        rawY[vi] = py + uy * step;
+      }
+      has[vi] = 1;
+    }
+  }
+  // Revert a snapped vertex that coincides with a snapped grid-neighbour, so a
+  // sharp corner cannot collapse a quad to zero area (keeps edges welded).
+  const eps2 = 0.15 * 0.15;
+  return (gx: number, gy: number) => {
+    const vi = gy * w + gx;
+    if (!has[vi]) return null;
+    const x = rawX[vi];
+    const y = rawY[vi];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = gx + dx;
+        const ny = gy + dy;
+        if (nx < 0 || ny < 0 || nx > gw || ny > gh) continue;
+        const ni = ny * w + nx;
+        if (!has[ni]) continue;
+        const ex = rawX[ni] - x;
+        const ey = rawY[ni] - y;
+        if (ex * ex + ey * ey < eps2) return null;
+      }
+    }
+    return [x, y];
+  };
+}
+
+/**
  * Extrude a binary mask to a solid prism over [z0, z1] (manifold heightfield:
  * cells outside the mask are empty). Used by the badge / coaster tools, where
  * a fine pixel grid keeps the stepped edges below the nozzle size.

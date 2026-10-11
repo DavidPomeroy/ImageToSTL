@@ -6,8 +6,12 @@
 // style recess on top holds the plate. The plate footprint is larger than the
 // opening, so the lid lands on the box rim and cannot drop through.
 //
-// Everything is a per-cell height above the bed (z0 = 0) built as ONE manifold
-// heightfield (lib/mesh.ts) per part, so there are no coincident internal faces:
+// The box and the lid are per-cell heights above the bed (z0 = 0) built as one
+// manifold heightfield (lib/mesh.ts) per part. The lid's plug is the exception:
+// it is meshed as its own solid with a smooth 45° chamfer on its leading edge (a
+// heightfield could only staircase the slope) and its top is raised into the
+// lid's flat underside, so a slicer unions the two — as the hinge pin overlaps
+// the wall:
 //
 //   box (side view)                 lid (side view, printed beside the box)
 //   ┌────────────────┐             ┌───────────────────┐  ← lid top
@@ -24,7 +28,8 @@
 // approach the frame / badge / coaster tools use.
 
 import {
-  buildHeightfieldGeometry,
+  buildSnappedHeightfieldGeometry,
+  makeContourSnapper,
   quantizeZ,
   type TriangleSoup,
 } from "./mesh";
@@ -91,10 +96,11 @@ export interface BoxInput {
   clearanceMm: number;
   /** How deep the lid's plug enters the opening (mm). */
   plugDepthMm: number;
-  /** Lid plug draft/bevel angle from vertical (degrees, 0–45). The plug is full
-   *  width at the lid and tapers this much narrower at the bed end so its walls
-   *  stay self-supporting (no support) when the lid is printed plug-down. */
-  plugBevelDeg?: number;
+  /** Straight 45° chamfer on the plug's leading (bed-facing) edge (mm; 0 =
+   *  square). It eases the plug into the opening and keeps the edge
+   *  self-supporting (≤45°) when the lid is printed plug-down, with no
+   *  support. Clamped to the plug depth (a 45° chamfer is no taller than it). */
+  plugChamferMm?: number;
   /** Hinged lid only: radial pin clearance (mm). */
   hingeClearanceMm?: number;
   /** Build a matching separate lid, printed beside the box. */
@@ -136,6 +142,151 @@ export interface BoxResult {
 
 const clamp = (v: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, v));
+
+/**
+ * Build the lid's plug as its own closed solid. The plug registers into the
+ * opening; its leading (bed-facing) edge carries a straight 45° chamfer so it is
+ * self-supporting when the lid is printed plug-down. Meshed explicitly — the
+ * bottom is a smooth ruled surface snapped to the true outline — because a
+ * heightfield can only staircase a slope (the same reason the Drawers tool
+ * meshes its chamfer as explicit faces). The solid's top is raised into the
+ * lid's flat underside so a slicer unions the two, exactly as the hinge pin
+ * overlaps the wall.
+ *
+ * `dist` is the signed distance to the plate silhouette in cells (+ inside);
+ * a plug cell has `dist > plugThresh`. A vertex's bottom height is the 45°
+ * chamfer read from the mean of its cells' distances, so the bottom stays
+ * continuous from cell to cell.
+ */
+function buildPlugSolid(
+  dist: Float32Array,
+  FW: number,
+  FH: number,
+  pixelSize: number,
+  plugThresh: number,
+  chamferCells: number,
+  chamferHeight: number,
+  plugTop: number,
+  snapAt: ((px: number, py: number) => [number, number] | null) | null
+): TriangleSoup {
+  const out: TriangleSoup = [];
+  const s = pixelSize;
+  const vw = FW + 1;
+  const inside = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < FW && y < FH && dist[y * FW + x] > plugThresh;
+  const reach = plugThresh + chamferCells;
+
+  // Snapped grid-vertex XY (image row 0 -> max Y) and the nodal bottom height.
+  const vX = new Float64Array(vw * (FH + 1));
+  const vY = new Float64Array(vw * (FH + 1));
+  const vZ = new Float64Array(vw * (FH + 1));
+  for (let gy = 0; gy <= FH; gy++) {
+    for (let gx = 0; gx <= FW; gx++) {
+      let px = gx,
+        py = gy;
+      if (snapAt) {
+        const r = snapAt(gx, gy);
+        if (r) {
+          px = r[0];
+          py = r[1];
+        }
+      }
+      const vi = gy * vw + gx;
+      vX[vi] = px * s;
+      vY[vi] = (FH - py) * s;
+      let sum = 0,
+        cnt = 0;
+      for (let dy = -1; dy <= 0; dy++) {
+        for (let dx = -1; dx <= 0; dx++) {
+          const cx = gx + dx,
+            cy = gy + dy;
+          if (cx >= 0 && cy >= 0 && cx < FW && cy < FH) {
+            sum += dist[cy * FW + cx];
+            cnt++;
+          }
+        }
+      }
+      const d = cnt > 0 ? sum / cnt : reach;
+      vZ[vi] = Math.max(0, Math.min(chamferHeight, (reach - d) * s));
+    }
+  }
+  const VX = (gx: number, gy: number): number => vX[gy * vw + gx];
+  const VY = (gx: number, gy: number): number => vY[gy * vw + gx];
+  const VZ = (gx: number, gy: number): number => vZ[gy * vw + gx];
+
+  // top (flat) + bottom (smooth chamfer) faces
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      if (!inside(x, y)) continue;
+      const blx = VX(x, y + 1),
+        bly = VY(x, y + 1),
+        blz = VZ(x, y + 1);
+      const brx = VX(x + 1, y + 1),
+        bry = VY(x + 1, y + 1),
+        brz = VZ(x + 1, y + 1);
+      const trx = VX(x + 1, y),
+        tryy = VY(x + 1, y),
+        trz = VZ(x + 1, y);
+      const tlx = VX(x, y),
+        tly = VY(x, y),
+        tlz = VZ(x, y);
+      // top (+Z)
+      out.push(blx, bly, plugTop, brx, bry, plugTop, trx, tryy, plugTop);
+      out.push(blx, bly, plugTop, trx, tryy, plugTop, tlx, tly, plugTop);
+      // bottom (-Z): per-corner z makes the chamfer a smooth ruled surface
+      out.push(blx, bly, blz, tlx, tly, tlz, trx, tryy, trz);
+      out.push(blx, bly, blz, trx, tryy, trz, brx, bry, brz);
+    }
+  }
+
+  // vertical walls where a plug cell meets an empty cell (bottom follows the
+  // nodal chamfer so the walls weld to the bottom faces)
+  for (let y = 0; y < FH; y++) {
+    for (let xe = 0; xe <= FW; xe++) {
+      const a = inside(xe - 1, y);
+      const b = inside(xe, y);
+      if (a === b) continue;
+      const cx = VX(xe, y + 1),
+        cy = VY(xe, y + 1),
+        cz = VZ(xe, y + 1); // lower Y
+      const tx = VX(xe, y),
+        ty = VY(xe, y),
+        tz = VZ(xe, y); // higher Y
+      if (a) {
+        // east face of the west cell (+X)
+        out.push(cx, cy, cz, tx, ty, tz, tx, ty, plugTop);
+        out.push(cx, cy, cz, tx, ty, plugTop, cx, cy, plugTop);
+      } else {
+        // west face of the east cell (-X)
+        out.push(cx, cy, cz, tx, ty, plugTop, tx, ty, tz);
+        out.push(cx, cy, cz, cx, cy, plugTop, tx, ty, plugTop);
+      }
+    }
+  }
+  for (let b = 0; b <= FH; b++) {
+    for (let x = 0; x < FW; x++) {
+      const a = inside(x, b - 1); // north (higher Y)
+      const c = inside(x, b); // south
+      if (a === c) continue;
+      const lx = VX(x, b),
+        ly = VY(x, b),
+        lz = VZ(x, b);
+      const rx = VX(x + 1, b),
+        ry = VY(x + 1, b),
+        rz = VZ(x + 1, b);
+      if (a) {
+        // south face of the north cell (-Y)
+        out.push(lx, ly, lz, rx, ry, rz, rx, ry, plugTop);
+        out.push(lx, ly, lz, rx, ry, plugTop, lx, ly, plugTop);
+      } else {
+        // north face of the south cell (+Y)
+        out.push(lx, ly, lz, rx, ry, plugTop, rx, ry, rz);
+        out.push(lx, ly, lz, lx, ly, plugTop, rx, ry, plugTop);
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * Build the box (and optional separate lid) that receives a plate of the given
@@ -197,12 +348,28 @@ export function buildBox(input: BoxInput): BoxResult {
   }
 
   // ---- signed distance (in cells) to the plate silhouette (+ inside) ----
-  const dIn = chamferToZero(plateMask, FW, FH); // inside -> nearest outside
-  const inv = new Uint8Array(n);
-  for (let i = 0; i < n; i++) inv[i] = plateMask[i] ? 0 : 1;
-  const dOut = chamferToZero(inv, FW, FH); // outside -> nearest inside
+  // For a shaped outline the analytic silhouette gives the exact distance, so
+  // the wall / opening / recess / plug thresholds land on the true contours and
+  // the mesh vertices can be snapped onto them. (A raster chamfer distance
+  // disagrees with the snap by up to a cell, which leaves the edge ragged.)
   const dist = new Float32Array(n);
-  for (let i = 0; i < n; i++) dist[i] = plateMask[i] ? dIn[i] : -dOut[i];
+  if (silhouette) {
+    for (let fy = 0; fy < FH; fy++) {
+      for (let fx = 0; fx < FW; fx++) {
+        const px = fx + 0.5 - padX;
+        const py = fy + 0.5 - padY;
+        const [qx, qy] = silhouette.project(px, py);
+        const d = Math.hypot(px - qx, py - qy);
+        dist[fy * FW + fx] = silhouette.inside(px, py) ? d : -d;
+      }
+    }
+  } else {
+    const dIn = chamferToZero(plateMask, FW, FH); // inside -> nearest outside
+    const inv = new Uint8Array(n);
+    for (let i = 0; i < n; i++) inv[i] = plateMask[i] ? 0 : 1;
+    const dOut = chamferToZero(inv, FW, FH); // outside -> nearest inside
+    for (let i = 0; i < n; i++) dist[i] = plateMask[i] ? dIn[i] : -dOut[i];
+  }
 
   // ---- thresholds (cells) ----
   const overCells = overhang / pixelSize; // plate -> opening edge
@@ -211,21 +378,46 @@ export function buildBox(input: BoxInput): BoxResult {
   const recessThresh = -clrCells; // inside the plate recess
   const outerReach = Math.max(padX, padY); // outside the box
 
-  // Plug bevel: a draft so the plug's walls stay self-supporting when the lid is
-  // printed plug-down. The plug is full width at the lid and tapers `bevelCells`
-  // narrower at the bed end; the angle is clamped to 45° (the support limit) and
-  // so it can never eat the whole plug.
-  const bevelDeg = clamp(input.plugBevelDeg ?? 45, 0, 45);
+  // Plug chamfer: a straight 45° cut on the plug's leading (bed-facing) edge so
+  // the edge stays self-supporting when the lid is printed plug-down, and so the
+  // plug eases into the opening. The cut is `chamferCells` wide and (at 45°)
+  // `chamferCells` tall; it is clamped to the plug depth (a 45° chamfer can be
+  // no taller than the plug) and to half the plug's width so it can never eat
+  // the whole plug.
   let maxDist = 0;
   for (let i = 0; i < n; i++) if (dist[i] > maxDist) maxDist = dist[i];
-  const bevelCells = Math.min(
-    (plugDepth * Math.tan((bevelDeg * Math.PI) / 180)) / pixelSize,
-    maxDist * 0.5
-  );
-  // Snap the bevel to a whole number of steps: the chamfer distance mixes 1 and
-  // √2, so a continuous ramp makes z-values that differ by <1e-3 and produce
-  // degenerate (zero-height) faces. Discrete levels keep the z cuts clean.
-  const bevelSteps = Math.max(1, Math.round(bevelCells));
+  const chamferMm = clamp(input.plugChamferMm ?? 3, 0, plugDepth);
+  const chamferCells = Math.min(chamferMm / pixelSize, maxDist * 0.5);
+  const chamferHeight = Math.min(chamferCells * pixelSize, plugDepth); // 45°
+
+  // ---- smooth contour snapping -------------------------------------------
+  // The box outline and every internal band edge (the opening, the lid recess
+  // and the plug) are offsets of the plate silhouette. Sliding the
+  // heightfield's grid vertices onto those true offsets — via the silhouette's
+  // exact nearest-point projection — turns each curved edge into a real
+  // arc/curve instead of a pixel staircase. Rectangular boxes have straight
+  // edges, so there is nothing to snap and the plain mesher is used.
+  const padSil = silhouette
+    ? {
+        inside: (px: number, py: number): boolean =>
+          silhouette.inside(px - padX, py - padY),
+        project: (px: number, py: number): [number, number] => {
+          const [qx, qy] = silhouette.project(px - padX, py - padY);
+          return [qx + padX, qy + padY];
+        },
+      }
+    : null;
+  const snapBody = padSil
+    ? makeContourSnapper(padSil, dist, FW, FH, [-outerReach, overCells])
+    : null;
+  const snapLid = padSil
+    ? makeContourSnapper(padSil, dist, FW, FH, [
+        -outerReach,
+        recessThresh,
+        plugThresh,
+        plugThresh + chamferCells,
+      ])
+    : null;
 
   // ---- heights (mm) ----
   const floor = wall;
@@ -248,12 +440,13 @@ export function buildBox(input: BoxInput): BoxResult {
     }
   }
   quantizeZ(boxZ1);
-  const boxPositions = buildHeightfieldGeometry(
+  const boxPositions = buildSnappedHeightfieldGeometry(
     new Float32Array(n),
     boxZ1,
     FW,
     FH,
-    pixelSize
+    pixelSize,
+    snapBody
   );
 
   // ---- hinge layout (print-in-place): sit on the shape's flat TOP edge ----
@@ -366,30 +559,40 @@ export function buildBox(input: BoxInput): BoxResult {
     for (let i = 0; i < n; i++) {
       const s = dist[i];
       if (!rectangular && s < -outerReach) continue; // outside the lid
-      // The plug reaches the bed at full width; its outer band is beveled so the
-      // wall tapers in toward the bed (self-supporting when printed plug-down).
-      if (bevelCells > 1e-6) {
-        if (s >= plugThresh + bevelCells) lz0[i] = 0;
-        else if (s >= plugThresh) {
-          const t = clamp((s - plugThresh) / bevelCells, 0, 1);
-          lz0[i] = plugDepth * (1 - Math.round(t * bevelSteps) / bevelSteps);
-        } else lz0[i] = plugDepth;
-      } else {
-        lz0[i] = s >= plugThresh ? 0 : plugDepth; // plug reaches the bed
-      }
+      // The lid is a flat-bottomed slab; the plug (with its 45° chamfer) is
+      // meshed as its own solid just below, so the chamfer is a smooth surface
+      // rather than a heightfield staircase. The plug's top is raised into this
+      // slab's underside so a slicer unions the two (as the hinge pin overlaps
+      // the wall).
+      lz0[i] = plugDepth;
       lz1[i] = s >= recessThresh ? lidTop - plateThk : lidTop; // plate recess
       any = true;
     }
     if (any) {
       quantizeZ(lz0);
       quantizeZ(lz1);
-      const lidPositions = buildHeightfieldGeometry(
+      const lidPositions = buildSnappedHeightfieldGeometry(
         lz0,
         lz1,
         FW,
         FH,
-        pixelSize
+        pixelSize,
+        snapLid
       );
+      // Smooth plug: an explicit solid whose leading edge is a 45° ruled chamfer.
+      const plugPositions = buildPlugSolid(
+        dist,
+        FW,
+        FH,
+        pixelSize,
+        plugThresh,
+        chamferCells,
+        chamferHeight,
+        plugDepth + Math.min(1, wall * 0.5), // overlap into the lid's slab
+        snapLid
+      );
+      for (let i = 0; i < plugPositions.length; i++)
+        lidPositions.push(plugPositions[i]);
       let z1 = lidTop;
       if (hingeOk && hingedInPlace) {
         // Print open: drop the plug into the opening, open the lid 90° about

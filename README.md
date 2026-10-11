@@ -24,8 +24,10 @@ A small Next.js web app with eight tools that all export slicer-ready, multi-par
   that fits the opening, with a recess the plate drops into) is printed beside
   it, so the plate becomes the box lid.
 - **Drawers → 3D** (`/drawers`) — a freestanding **chest of drawers**: an
-  open-front cabinet divided into 1–8 compartments, plus matching drawer trays
-  printed beside it. Tune the cabinet size, wall/shelf thickness and drawer fit.
+  open-front cabinet divided into 1–8 compartments by side-rail shelves, plus
+  matching **drawer fronts and trays** (separate parts joined by a sliding
+  dovetail, with optional hex-pattern tray walls) printed beside it. Tune the
+  cabinet size, thicknesses and colours.
 - **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
   a map** into a solid **3D terrain tile** with a variable-height relief, an
   optional coloured base plate and optional elevation colour bands.
@@ -305,11 +307,12 @@ categories — fall back to the full rectangle.)
   its underside that registers into the opening.
 - **Lid overhang / Fit clearance / Plug depth** — how far the plate overhangs
   the opening, the lid-to-box fit gap, and how deep the plug enters.
-- **Plug bevel** — the plug's walls are drafted (0–45&nbsp;° from vertical) so the
-  plug is full width at the lid and tapers narrower toward its bed end. This
-  keeps the walls self-supporting (≤45&nbsp;°) when the lid is printed
-  plug-down, so the plug needs no support, and eases it into the opening; the
-  top stays full width so it still fits. 0&nbsp;° gives straight vertical walls.
+- **Plug chamfer** — a straight **45° chamfer** on the plug's leading
+  (bed-facing) edge, sized in mm (0 gives a square plug). It eases the plug into
+  the opening and keeps the edge self-supporting (≤45&nbsp;°) when the lid is
+  printed plug-down, so the plug needs no support; the rest of the plug wall
+  stays vertical and the top stays full width, so it still fits. Clamped to the
+  plug depth (a 45° chamfer is no taller than the plug).
 - **Hinged lid** — a **print-in-place pin hinge** runs along the shape's flat
   **top** edge: a round pin (part of the box, along that edge, never wider than
   the box) passes through C-shaped knuckles on the lid with a **hinge
@@ -344,42 +347,83 @@ on); print the plate from the Image → 3D tool separately and seat it in the li
 
 A freestanding **chest of drawers** built from a few parameters — no image
 needed. The cabinet is an open-front box (floor + left/right/back walls + roof)
-divided by (N − 1) shelves into **1–8 compartments**, and **N drawer trays**
-(box open at the top, with a taller **front panel** that closes the compartment
-opening and overhangs the sides as a stop) are laid out beside it, so both print
-flat and support-free.
+divided by (N − 1) shelves into **1–8 compartments**. Each drawer is **two
+printed parts**: a full-width **front panel**, and an open-top tray that is
+**open at the front too** (the panel closes it). The panel's back carries
+dovetail **grooves** that slide onto **tenons cut into the tray's exposed side
+wall ends**, so the front can take its own colour and the tray walls can be
+lightened (see below). Fronts and trays are laid out beside the cabinet, and the
+page shows **two 3D previews**: that print layout, and the chest **assembled**
+(both previews share the one viewer — the assembled one feeds it the parts in the
+model's own space, so it stands upright with the drawers pushed home, and its
+**Open drawers** button slides the fronts and trays out and back as an animation:
+the viewer applies that as a per-frame mesh translation, so nothing is
+re-triangulated).
+
+Each **shelf is two side rails**, not a full slab (see *Shelf rail width*), and
+the cube prints **on its back** — back face on the bed, opening facing up — so
+the floor, roof and rails stand as vertical walls and nothing bridges over the
+cavity. The drawers print in their usual flat orientation beside it, so both are
+support-free.
 
 - **Width / Depth / Height** — the cabinet's outer size (independent, so it can
   be square or a shallow/wide desktop unit).
 - **Drawers** — how many compartments (and drawer trays) to build.
 - **Wall / Floor / Roof / Shelf thickness** — the cabinet walls, its base, its
   top and the dividers between compartments.
+- **Shelf rail width** — how wide each of a shelf's **two side rails** is. The
+  drawer tray rests on the rails and the middle of the compartment stays open,
+  so a shelf uses far less filament than a full slab (the reference
+  Question-Mark-block drawers do the same).
 - **Drawer tray wall / tray floor / front panel thickness** — the tray's own
   walls and floor and the thickness of the front face.
-- **Chamfer (cube edges)** — a straight **45° chamfer** applied to **all twelve
-  outer edges** of the cabinet (the 4 vertical corners, the 4 top edges and the
-  4 bottom edges). The drawer fronts are **full width** and carry the same
-  chamfer on their left/right edges, so a closed cabinet reads as one beveled
-  cube. The chamfer is clamped to the thinnest of the wall / floor / roof /
-  front panel (a warning appears if it had to be reduced). 0&nbsp;mm gives the
-  plain square box. The bevel overhangs at the bottom, so print with a brim.
+- **Tray side / back walls** — *Solid*, or a **hexagon pattern**: a honeycomb of
+  hex holes is punched through the tray's three walls — left, right and back
+  (the hole size is a slider; a web is left between the holes) — to use less
+  filament. The tray's front is open, so its exposed side-wall ends carry the
+  dovetail tenons.
+- **Drawer front colour / drawer tray colour** — the fronts and trays print as
+  separate parts, so each takes its own filament.
+- **Chamfer (cube edges)** — a straight **45° chamfer** on the cabinet's outer
+  edges, which **fades out at the front face**: the front stays a plain square
+  and the **drawer fronts** carry the bevel there (their front edges are full
+  width, cut back at 45°), so a closed cabinet still reads as one beveled cube.
+  Over the first `c` mm behind the front the cut ramps in from nothing, meeting
+  the full bevel exactly, so there is no step. The chamfer is clamped to the
+  thinnest of the wall / floor / roof / front panel (a warning appears if it had
+  to be reduced). 0&nbsp;mm gives the plain square box. The chamfer overhangs at
+  the bed, so print with a brim.
 - **Drawer fit clearance** — the gap between a drawer and its opening, per
   enclosed side (0.2–0.4&nbsp;mm suits most FDM printers).
-- **Drawer vertical gap** — play left between a drawer's panel and its
-  compartment so it never rubs.
+- **Drawer vertical gap** — play around a drawer: it keeps the tray clear of its
+  shelf (the tray is sized to the compartment minus this) and is the visible seam
+  between consecutive front panels (each panel stops half this short of the
+  shelf's mid-line, so the fronts almost touch).
 
 **How it is built** — a heightfield cannot slope an outer face (its side walls
 are always vertical) and can only staircase a corner, so the cabinet is built as
-**one explicit closed polyhedron**: the chamfered box's 6 shrunken face
-rectangles, its 12 edge-chamfer rectangles and 8 corner triangles, with the
-front cavity cut as a rectangular pocket (the front face becomes a ring,
-triangulated with `earcut`). The (N&nbsp;−&nbsp;1) shelves are exact boxes. Each
-drawer is an explicit **full-width front panel** (two front vertical corners cut
-by the chamfer) plus an explicit open-top **tray**, laid out in a column beside
-the cabinet (a 6&nbsp;mm gap). Import as one object with multiple parts: the
-slicer unions the cabinet, its shelves and the drawer trays, and each part takes
-one extruder colour. (The mesh-level geometry tests check every part stays
-watertight for chamfers 0–3&nbsp;mm across 1–6 drawers.)
+**one explicit closed polyhedron**: the cabinet's 6 faces — bottom, top, left and
+right are hexagons (earcut-triangulated) that fan out to the full front square,
+while the bevel ramps in over the front collar — plus 8 edge-chamfer rectangles
+and 4 back corner triangles, with the front cavity cut as a rectangular pocket
+(the front face becomes a ring, triangulated with `earcut`), with each shelf's
+two exact **side-rail** boxes (not a full slab) welded into the same mesh, and
+the whole cube is then rotated so its back rests on the bed and the opening faces
+up. Each drawer is an explicit **full-width front panel** (two front vertical
+corners cut by the chamfer, with dovetail **grooves** in its back, sized to its
+compartment **plus half of each dividing shelf** so the panels almost touch and
+the outermost ones reach the cabinet's bottom and top faces) and an explicit
+**open-top, open-front tray**:
+a floor plus three walls, each side wall's exposed front end cut into the
+matching dovetail **tenon**. Both grooves and tenons run along Z (the print's up
+axis), so every joint face stays vertical and prints support-free; the panel
+simply drops onto the tray's wall ends, with the fit clearance. Front and tray
+print as **separate parts**, in columns beside the cabinet (a 6&nbsp;mm gap
+each) in the flat orientation.
+Import as one object
+with multiple parts: each part takes one extruder colour. (The mesh-level
+geometry tests check every part stays watertight for chamfers 0–3&nbsp;mm across
+1–6 drawers, and for both tray-wall styles.)
 
 ## Terrain → 3D (`/terrain`) — experimental, may not work as expected
 
@@ -451,6 +495,24 @@ query from Nominatim. Your browser's location is requested once, only to centre
 the map (and only if you allow it).
 
 
+## 3D preview
+
+Every tool's 3D preview is the same shared viewer (`components/PreviewGeneric.tsx`;
+the Image → 3D page's `Preview3D` just feeds it the processed meshes). Its
+top-left toolbar lets you:
+
+- **World** — set the **world-space (background) colour**. The default is a
+  neutral grey, and your choice is remembered across tools (stored in
+  `localStorage`).
+- **Orbit** — when the model has **more than one object** (a box and its lid, a
+  cabinet and its drawers, a frame and its lip, terrain and its frame/buildings,
+  a multi-colour plate), pick which object — or the whole **world space** — the
+  camera orbits around. Choosing an object re-centres the view on it, keeping the
+  current angle and zoom. Single-object previews show no picker.
+
+Drag to orbit and scroll to zoom as before; **Reset view** refits the camera.
+
+
 ## Run it
 
 ```bash
@@ -507,14 +569,16 @@ rebate at the plate's bend radius.
 app/               Next.js app router pages (/ image tool, /text sign tool,
                    /badge, /coaster, /frame, /box, /drawers, /terrain),
                    layout, styles
-components/        Dropzone, Controls, PaletteEditor, Preview2D, Preview3D,
+components/        Dropzone, Controls, PaletteEditor, Preview2D,
+                   Preview3D (Image → 3D, delegates to PreviewGeneric),
                    TextControls (text sign controls), BadgeControls,
                    CoasterControls, FrameControls (picture frame controls),
                    BoxControls (storage box controls),
                    DrawersControls (drawer cabinet controls),
                    TerrainControls (terrain controls),
                    MapPicker (Leaflet location picker), ToolNav (shared tabs),
-                   PreviewGeneric (shared multi-part 3D viewer)
+                   PreviewGeneric (shared multi-part 3D viewer — world-space
+                   colour + orbit-around-object controls)
 lib/quantize.ts    median cut + farthest-point seeded k-means, pixel mapping
 lib/mesh.ts        pixel grid → merged rects → extruded box triangles
                    (arbitrary z0..z1 bands for layered mode)

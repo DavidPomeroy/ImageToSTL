@@ -27,7 +27,8 @@
 // the badge / coaster tools use.
 
 import {
-  buildHeightfieldGeometry,
+  buildSnappedHeightfieldGeometry,
+  makeContourSnapper,
   quantizeZ,
   type TriangleSoup,
 } from "./mesh";
@@ -226,18 +227,64 @@ export function buildFrame(input: FrameInput): FrameResult {
   }
 
   // ---- signed distance (in cells) to the plate silhouette (+ inside) ----
-  const dIn = chamferToZero(plateMask, FW, FH); // inside -> nearest outside
-  const inv = new Uint8Array(n);
-  for (let i = 0; i < n; i++) inv[i] = plateMask[i] ? 0 : 1;
-  const dOut = chamferToZero(inv, FW, FH); // outside -> nearest inside
+  // For a shaped outline the analytic silhouette gives the exact distance, so
+  // the wall / ledge / lip thresholds land on the true contours and the mesh
+  // vertices can be snapped onto them (a raster chamfer distance disagrees
+  // with the snap by up to a cell and leaves the edge ragged).
   const dist = new Float32Array(n);
-  for (let i = 0; i < n; i++) dist[i] = plateMask[i] ? dIn[i] : -dOut[i];
+  if (silhouette) {
+    for (let fy = 0; fy < FH; fy++) {
+      for (let fx = 0; fx < FW; fx++) {
+        const px = fx + 0.5 - padX;
+        const py = fy + 0.5 - padY;
+        const [qx, qy] = silhouette.project(px, py);
+        const d = Math.hypot(px - qx, py - qy);
+        dist[fy * FW + fx] = silhouette.inside(px, py) ? d : -d;
+      }
+    }
+  } else {
+    const dIn = chamferToZero(plateMask, FW, FH); // inside -> nearest outside
+    const inv = new Uint8Array(n);
+    for (let i = 0; i < n; i++) inv[i] = plateMask[i] ? 0 : 1;
+    const dOut = chamferToZero(inv, FW, FH); // outside -> nearest inside
+    for (let i = 0; i < n; i++) dist[i] = plateMask[i] ? dIn[i] : -dOut[i];
+  }
 
   // ---- band thresholds (cells) ----
   const cw = Math.max(0.1, input.clearanceMm) / pixelSize;
   const ledge = Math.max(0.5, input.ledgeMm) / pixelSize;
   const lip = Math.max(0, input.lipMm) / pixelSize;
   const outerReach = cw + Math.max(padX, padY);
+  const ledChCells =
+    input.back === "channel" ? Math.max(1, input.channelWidthMm) / pixelSize : 0;
+
+  // ---- smooth contour snapping ----
+  // The frame outline and its internal band edges (the wall's inner face, the
+  // rebate ledge and the LED channel) are offsets of the plate silhouette.
+  // Sliding the grid vertices onto those true offsets (via the silhouette's
+  // exact nearest-point projection) makes each curved edge a real arc.
+  // Rectangular frames have straight edges, so there is nothing to snap.
+  const padSil = silhouette
+    ? {
+        inside: (px: number, py: number): boolean =>
+          silhouette.inside(px - padX, py - padY),
+        project: (px: number, py: number): [number, number] => {
+          const [qx, qy] = silhouette.project(px - padX, py - padY);
+          return [qx + padX, qy + padY];
+        },
+      }
+    : null;
+  const snapMain = padSil
+    ? makeContourSnapper(padSil, dist, FW, FH, [
+        -outerReach,
+        -cw,
+        ledge,
+        ...(ledChCells > 0 ? [ledge + ledChCells] : []),
+      ])
+    : null;
+  const snapLip = padSil
+    ? makeContourSnapper(padSil, dist, FW, FH, [-cw, lip])
+    : null;
 
   // ---- heights (mm) ----
   const backThk = input.back === "open" ? 0 : Math.max(0.2, input.backMm);
@@ -293,12 +340,13 @@ export function buildFrame(input: FrameInput): FrameResult {
   }
 
   quantizeZ(z1);
-  const positions = buildHeightfieldGeometry(
+  const positions = buildSnappedHeightfieldGeometry(
     new Float32Array(n),
     z1,
     FW,
     FH,
-    pixelSize
+    pixelSize,
+    snapMain
   );
 
   // Optional retaining lip — a slide-in rim so the plate can actually be
@@ -345,7 +393,15 @@ export function buildFrame(input: FrameInput): FrameResult {
         any = true;
       }
     }
-    if (any) lipSoup = buildHeightfieldGeometry(lz0, lz1, FW, FH, pixelSize);
+    if (any)
+      lipSoup = buildSnappedHeightfieldGeometry(
+        lz0,
+        lz1,
+        FW,
+        FH,
+        pixelSize,
+        snapLip
+      );
   }
 
   // ---- 2D preview: frame material, cavity and the plate window ----

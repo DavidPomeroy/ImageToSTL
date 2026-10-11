@@ -47,6 +47,7 @@ const DEFAULT_CFG: DrawersControlValues = {
   floorMm: 4,
   roofMm: 4,
   shelfMm: 4,
+  shelfRailMm: 10,
   drawerCount: 3,
   trayWallMm: 3,
   trayFloorMm: 3,
@@ -57,6 +58,9 @@ const DEFAULT_CFG: DrawersControlValues = {
   resolution: 200,
   color: [245, 200, 30],
   drawerColor: [240, 240, 240],
+  frontColor: [235, 235, 240],
+  trayWallStyle: "solid",
+  hexMm: 10,
 };
 
 /** 2D top-down footprint preview: cabinet walls, cavity floor and the opening. */
@@ -98,6 +102,8 @@ export default function DrawersPage() {
   );
 
   const [fitNonce, setFitNonce] = useState(0);
+  const [assembledFitNonce, setAssembledFitNonce] = useState(0);
+  const [drawersOpen, setDrawersOpen] = useState(false);
   const [busy, setBusy] = useState<"3mf" | "stl" | null>(null);
   const [result, setResult] = useState<DrawersResult | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -118,6 +124,7 @@ export default function DrawersPage() {
           floorMm: debCfg.floorMm,
           roofMm: debCfg.roofMm,
           shelfMm: debCfg.shelfMm,
+          shelfRailMm: debCfg.shelfRailMm,
           drawerCount: debCfg.drawerCount,
           trayWallMm: debCfg.trayWallMm,
           trayFloorMm: debCfg.trayFloorMm,
@@ -128,9 +135,13 @@ export default function DrawersPage() {
           resolution: debCfg.resolution,
           color: debCfg.color,
           drawerColor: debCfg.drawerColor,
+          frontColor: debCfg.frontColor,
+          trayWallStyle: debCfg.trayWallStyle,
+          hexMm: debCfg.hexMm,
         });
         setResult(r);
         setFitNonce((n) => n + 1);
+        setAssembledFitNonce((n) => n + 1);
       } catch (e) {
         console.error(e);
         setResult(null);
@@ -156,6 +167,34 @@ export default function DrawersPage() {
           positions: p.positions,
         })),
     [result]
+  );
+
+  const assembledParts = useMemo(
+    () =>
+      (result?.assembled.parts ?? [])
+        .filter((p) => p.positions.length > 0)
+        .map((p) => ({
+          name: p.name,
+          color: p.color,
+          positions: p.positions,
+        })),
+    [result]
+  );
+
+  // the assembled preview can animate the drawers out; PreviewGeneric applies
+  // this as a per-frame mesh translation, so it costs no geometry work
+  const assembledMotion = useMemo(
+    () => ({
+      open: drawersOpen,
+      offset: [0, -(result?.assembled.openMm ?? 0), 0] as [
+        number,
+        number,
+        number,
+      ],
+      durationMs: 900,
+      match: (name: string) => /^(Front|Tray)/.test(name),
+    }),
+    [drawersOpen, result]
   );
 
   const fileBase = useMemo(
@@ -200,9 +239,10 @@ export default function DrawersPage() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
             Build a freestanding chest of drawers: an open-front cabinet divided
-            into compartments, plus matching drawer trays printed beside it.
-            Tune the size, wall thickness and fit, then export 3MF / STL for
-            Bambu Studio or PrusaSlicer.
+            into compartments by side-rail shelves, plus matching drawer fronts
+            and trays (joined by a dovetail) printed beside it. Tune the size,
+            wall thickness and fit, then export 3MF / STL for Bambu Studio or
+            PrusaSlicer.
           </p>
         </header>
 
@@ -242,7 +282,7 @@ export default function DrawersPage() {
                   <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50">
                     <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                        3D preview
+                        3D preview — as printed
                       </h3>
                       <button
                         type="button"
@@ -258,6 +298,39 @@ export default function DrawersPage() {
                         bboxMm={result.bboxMm}
                         centerMm={result.centerMm}
                         fitNonce={fitNonce}
+                      />
+                      {showLoading && <LoadingOverlay title="Building…" />}
+                    </div>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50">
+                    <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+                        3D preview — assembled
+                      </h3>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setDrawersOpen((o) => !o)}
+                          className="text-xs text-zinc-500 hover:text-zinc-300"
+                        >
+                          {drawersOpen ? "Close drawers" : "Open drawers"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAssembledFitNonce((n) => n + 1)}
+                          className="text-xs text-zinc-500 hover:text-zinc-300"
+                        >
+                          Reset view
+                        </button>
+                      </div>
+                    </div>
+                    <div className="relative h-96 bg-zinc-950">
+                      <PreviewGeneric
+                        parts={assembledParts}
+                        bboxMm={result.assembled.bboxMm}
+                        centerMm={result.assembled.centerMm}
+                        fitNonce={assembledFitNonce}
+                        motion={assembledMotion}
                       />
                       {showLoading && <LoadingOverlay title="Building…" />}
                     </div>
@@ -296,10 +369,15 @@ export default function DrawersPage() {
                     <span>Parts: {parts.length}</span>
                   </div>
                   <p className="mb-4 max-w-2xl text-xs leading-relaxed text-zinc-500">
-                    The cabinet prints upright with the drawers beside it. Import
-                    as one object and assign an extruder to each part; the
-                    slicer unions the cabinet, shelves and drawers into one
-                    printable assembly.
+                    The first view is the print layout: the cube on its back with
+                    the opening facing up (so nothing bridges the cavity) and the
+                    drawers beside it. The second is the same chest assembled — use
+                    <span className="text-zinc-400"> Open drawers </span>
+                    to slide every drawer out and back, or drag to orbit it. Each
+                    front drops onto its compartment&apos;s tenons with the tray slid
+                    in behind. Import as one object and assign an extruder to each
+                    part; the slicer unions the cabinet (with its shelves), fronts
+                    and trays into one printable assembly.
                   </p>
                   <div className="flex flex-wrap gap-3">
                     <button

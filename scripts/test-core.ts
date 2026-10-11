@@ -24,7 +24,12 @@ import {
   shapePolygon,
   SHAPE_CATEGORIES,
 } from "../lib/shapes";
-import { makeFineShapeGrid, buildShapeClippedGeometry } from "../lib/mesh";
+import {
+  makeFineShapeGrid,
+  buildShapeClippedGeometry,
+  buildSnappedHeightfieldGeometry,
+  shapeContourSnapper,
+} from "../lib/mesh";
 import { applyCurve, curveRadius } from "../lib/curve";
 import {
   formatSliderValue,
@@ -110,6 +115,38 @@ function analyzeEdges(positions: number[]): {
     else bad++;
   }
   return { holes, bad, saddles };
+}
+
+/**
+ * Count directed edges that break consistent outward winding. In a closed,
+ * manifold mesh every directed edge (a→b) appears exactly once and its opposite
+ * (b→a) exactly once; a face wound inward leaves its three edges missing while
+ * their opposites are duplicated. `analyzeEdges` counts UNDIRECTED edges, so it
+ * stays green — which is how an inward-facing dovetail groove floor (rendering as
+ * a see-through slot from the back of a drawer front) slipped through before.
+ */
+function countFlippedFaces(positions: number[]): number {
+  const vkey = (i: number) =>
+    positions[i].toFixed(3) +
+    "," +
+    positions[i + 1].toFixed(3) +
+    "," +
+    positions[i + 2].toFixed(3);
+  const dir = new Map<string, number>();
+  for (let t = 0; t + 8 < positions.length; t += 9) {
+    const v = [vkey(t), vkey(t + 3), vkey(t + 6)];
+    for (let e = 0; e < 3; e++) {
+      const k = v[e] + ">" + v[(e + 1) % 3];
+      dir.set(k, (dir.get(k) ?? 0) + 1);
+    }
+  }
+  let flipped = 0;
+  for (const [k, c] of dir) {
+    const i = k.indexOf(">");
+    const opp = k.slice(i + 1) + ">" + k.slice(0, i);
+    if (c !== 1 || (dir.get(opp) ?? 0) !== 1) flipped++;
+  }
+  return flipped;
 }
 
 /** Count edges shared by other than exactly 2 triangles (non-manifold). */
@@ -2660,7 +2697,8 @@ check(
   );
 }
 
-// plug bevel: the plug tapers toward the bed (self-supporting printed plug-down)
+// plug chamfer: the plug's leading edge is chamfered at 45° (self-supporting
+// when the lid is printed plug-down)
 {
   const bedWidth = (r: ReturnType<typeof buildBox>): number => {
     const lid = r.parts[1].positions;
@@ -2673,18 +2711,48 @@ check(
       }
     return x1 - x0;
   };
-  const flat = buildBox({ ...boxBase, plugBevelDeg: 0 });
-  const bev = buildBox({ ...boxBase, plugBevelDeg: 45 });
+  const square = buildBox({ ...boxBase, plugChamferMm: 0 });
+  const cham = buildBox({ ...boxBase, plugChamferMm: boxBase.plugDepthMm });
   check(
-    bedWidth(flat) > 0 && bedWidth(bev) < bedWidth(flat) - 5,
-    `plug bevel tapers the plug at the bed (${bedWidth(flat).toFixed(
+    bedWidth(square) > 0 && bedWidth(cham) < bedWidth(square) - 5,
+    `plug chamfer insets the bed footprint (${bedWidth(square).toFixed(
       1
-    )} → ${bedWidth(bev).toFixed(1)} mm)`
+    )} → ${bedWidth(cham).toFixed(1)} mm)`
   );
   check(
-    bev.parts.every((p) => boxDefects(p.positions) === 0),
-    "bevelled plug stays watertight"
+    cham.parts.every((p) => boxDefects(p.positions) === 0),
+    "chamfered plug stays watertight"
   );
+  // the chamfer is a smooth 45° surface, not a heightfield staircase: inside the
+  // band there must be no axis-aligned vertical "riser" faces, only tilted ones
+  {
+    const lid = cham.parts[1].positions;
+    let risers = 0;
+    let sloped = 0;
+    for (let t = 0; t + 8 < lid.length; t += 9) {
+      const az = lid[t + 2],
+        bz = lid[t + 5],
+        cz2 = lid[t + 8];
+      if (!(az > 0.1 && bz > 0.1 && cz2 > 0.1)) continue; // inside the band
+      if (!(az < 4.5 && bz < 4.5 && cz2 < 4.5)) continue;
+      const ax = lid[t],
+        ay = lid[t + 1];
+      const bx = lid[t + 3],
+        by = lid[t + 4];
+      const cx = lid[t + 6],
+        cy = lid[t + 7];
+      const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const nx = (by - ay) * (cz2 - az) - (bz - az) * (cy - ay);
+      const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz2 - az);
+      const nzc = Math.abs(nz) / (Math.hypot(nx, ny, nz) || 1);
+      if (nzc < 0.2) risers++;
+      else if (nzc > 0.4 && nzc < 0.95) sloped++;
+    }
+    check(
+      risers === 0 && sloped > 0,
+      `plug chamfer is smooth, not stepped (${risers} risers, ${sloped} 45° faces)`
+    );
+  }
 }
 
 // ---- drawer cabinet: open-front cabinet + N drawers printed beside it ----
@@ -2697,6 +2765,7 @@ const drawerBase = {
   floorMm: 4,
   roofMm: 4,
   shelfMm: 4,
+  shelfRailMm: 10,
   drawerCount: 3,
   trayWallMm: 3,
   trayFloorMm: 3,
@@ -2707,6 +2776,9 @@ const drawerBase = {
   resolution: 260,
   color: [240, 200, 40] as RGB,
   drawerColor: [240, 240, 240] as RGB,
+  frontColor: [245, 245, 250] as RGB,
+  trayWallStyle: "solid" as const,
+  hexMm: 10,
 };
 {
   const d = buildDrawers(drawerBase);
@@ -2715,9 +2787,121 @@ const drawerBase = {
     return holes + bad;
   };
   check(
-    d.parts.length === d.drawerCount + 2,
-    `parts = N drawers + cabinet + shelves (${d.parts.length})`
+    d.parts.length === 1 + 2 * d.drawerCount,
+    `parts = cabinet (with shelves) + N fronts + N trays (${d.parts.length})`
   );
+  check(
+    !d.parts.some((p) => p.name === "Shelves"),
+    "the shelves are part of the cabinet, not a separate part"
+  );
+
+  // the second preview: the same drawers pushed home into the cabinet
+  {
+    const a = d.assembled.parts;
+    const span = (p: number[], axis: number): [number, number] => {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let i = axis; i < p.length; i += 3) {
+        if (p[i] < lo) lo = p[i];
+        if (p[i] > hi) hi = p[i];
+      }
+      return [lo, hi];
+    };
+    const fronts = a.filter((p) => p.name.startsWith("Front"));
+    const trays = a.filter((p) => p.name.startsWith("Tray"));
+    check(
+      a.length === 1 + 2 * d.drawerCount &&
+        a[0].name === "Cabinet" &&
+        fronts.length === d.drawerCount &&
+        trays.length === d.drawerCount,
+      `assembled pose = cabinet + N fronts + N trays (${a.length})`
+    );
+    check(
+      fronts.every((p) => Math.abs(span(p.positions, 1)[1]) < 1e-6),
+      "assembled fronts sit flush on the cabinet's front face"
+    );
+    // the fronts cover the whole front: the bottom one starts at the cabinet's
+    // floor, the top one ends at its roof, and only `gap` sits between them —
+    // otherwise the shelves show through as banding
+    const zRanges = fronts
+      .map((p) => span(p.positions, 2))
+      .sort((a, b) => a[0] - b[0]);
+    const frontGaps = zRanges.slice(1).map((r, i) => r[0] - zRanges[i][1]);
+    check(
+      Math.abs(zRanges[0][0]) < 1e-6 &&
+        Math.abs(
+          zRanges[zRanges.length - 1][1] - drawerBase.cabinetHeightMm
+        ) < 1e-6 &&
+        frontGaps.every((g) => Math.abs(g - drawerBase.gapMm) < 1e-6),
+      `fronts reach the cabinet's bottom and top, ${drawerBase.gapMm} mm apart (${frontGaps
+        .map((g) => g.toFixed(2))
+        .join(", ")} mm)`
+    );
+    // ...while the trays still fit inside their compartments
+    check(
+      trays.every((p, k) => {
+        const compTop =
+          drawerBase.floorMm +
+          k * (d.compartmentHeightMm + drawerBase.shelfMm) +
+          d.compartmentHeightMm;
+        return span(p.positions, 2)[1] <= compTop + 1e-6;
+      }),
+      "assembled trays stay under their compartment's shelf"
+    );
+    const trayW =
+      drawerBase.cabinetWidthMm -
+      2 * drawerBase.wallMm -
+      2 * drawerBase.fitClearanceMm;
+    check(
+      // a drawer pulls most of the way out, but stays engaged
+      d.assembled.openMm > drawerBase.frontMm &&
+        d.assembled.openMm <
+          (drawerBase.cabinetDepthMm -
+            drawerBase.wallMm -
+            drawerBase.fitClearanceMm) *
+            0.9,
+      `the assembled preview can open the drawers (${d.assembled.openMm.toFixed(
+        0
+      )} mm of travel)`
+    );
+    check(
+      trays.every((p) => {
+        const [x0, x1] = span(p.positions, 0);
+        const [y0, y1] = span(p.positions, 1);
+        return (
+          // the tenons reach forward into the panel's groove …
+          y0 < -1e-6 &&
+          // … without poking through its front face,
+          y0 >= -(drawerBase.frontMm + 1e-6) &&
+          // and the tray itself stays inside the cavity
+          y1 <= drawerBase.cabinetDepthMm - drawerBase.wallMm + 1e-6 &&
+          Math.abs(x0 - (drawerBase.cabinetWidthMm - trayW) / 2) < 1e-6 &&
+          x1 <= drawerBase.cabinetWidthMm + 1e-6
+        );
+      }),
+      "assembled trays sit behind the fronts, tenons in the grooves and centred"
+    );
+    check(
+      trays.every(
+        (p, k) =>
+          Math.abs(
+            span(p.positions, 2)[0] -
+              (drawerBase.floorMm +
+                k * (d.compartmentHeightMm + drawerBase.shelfMm))
+          ) < 1e-6
+      ),
+      "assembled trays stack one per shelf, each on its compartment floor"
+    );
+    check(
+      Math.abs(d.assembled.bboxMm.x - drawerBase.cabinetWidthMm) < 1e-6 &&
+        Math.abs(
+          d.assembled.bboxMm.y -
+            (drawerBase.cabinetDepthMm + drawerBase.frontMm)
+        ) < 1e-6 &&
+        Math.abs(d.assembled.bboxMm.z - drawerBase.cabinetHeightMm) < 1e-6,
+      `assembled chest bounds = cabinet + proud fronts (${d.assembled.bboxMm.x.toFixed(1)} x ${d.assembled.bboxMm.y.toFixed(1)} x ${d.assembled.bboxMm.z.toFixed(1)} mm)`
+    );
+  }
   check(
     d.parts.every((p) => drawDefects(p.positions) === 0),
     "every drawer part is watertight"
@@ -2725,6 +2909,12 @@ const drawerBase = {
   check(
     d.parts.every((p) => p.positions.length > 0 && p.positions.length % 9 === 0),
     "drawer part positions are valid triangle soups"
+  );
+  check(
+    d.parts
+      .filter((p) => p.name.startsWith("Front") || p.name.startsWith("Tray"))
+      .every((p) => countFlippedFaces(p.positions) === 0),
+    "drawer fronts and trays are wound outward (no see-through groove floors)"
   );
   check(
     Math.abs(d.widthMm - 150) < 1e-6 && Math.abs(d.heightMm - 150) < 1e-6,
@@ -2762,17 +2952,42 @@ const drawerBase = {
   // a single-drawer cabinet has no shelves part (cabinet + drawer)
   const one = buildDrawers({ ...drawerBase, drawerCount: 1 });
   check(
-    one.parts.length === 2 &&
+    one.parts.length === 3 &&
       one.parts.every((p) => drawDefects(p.positions) === 0),
-    "1-drawer cabinet is 2 watertight parts (cabinet + drawer)"
+    "1-drawer cabinet is 3 watertight parts (cabinet + front + tray)"
   );
-  // a full sweep of drawer counts stays watertight
+  // with no welded shelves every part is a clean closed solid, so the cabinet's
+  // winding can be checked too
+  check(
+    one.parts.every((p) => countFlippedFaces(p.positions) === 0),
+    "1-drawer parts are wound outward (cabinet, front and tray)"
+  );
+  // a full sweep of drawer counts stays watertight (and outward-wound)
   let sweepBad = 0;
+  let sweepFlip = 0;
   for (let nc = 1; nc <= 6; nc++) {
     const r = buildDrawers({ ...drawerBase, drawerCount: nc });
     sweepBad += r.parts.reduce((s, p) => s + drawDefects(p.positions), 0);
+    sweepFlip += r.parts
+      .filter((p) => p.name.startsWith("Front") || p.name.startsWith("Tray"))
+      .reduce((s, p) => s + countFlippedFaces(p.positions), 0);
   }
   check(sweepBad === 0, `drawer counts 1..6 stay watertight (${sweepBad} defects)`);
+  check(sweepFlip === 0, `drawer counts 1..6 wind every face outward (${sweepFlip})`);
+
+  // the groove depth is derived from the panel thickness (and clamped), so the
+  // see-through-floor degeneracy must not come back at any thickness
+  let frontFlip = 0;
+  for (const fm of [2, 3, 4, 5, 6, 8]) {
+    const r = buildDrawers({ ...drawerBase, frontMm: fm });
+    frontFlip += r.parts
+      .filter((p) => p.name.startsWith("Front") || p.name.startsWith("Tray"))
+      .reduce((s, p) => s + countFlippedFaces(p.positions), 0);
+  }
+  check(
+    frontFlip === 0,
+    `front thicknesses 2..8 mm wind every face outward (${frontFlip})`
+  );
 
   // the chamfer shrinks the bed-level footprint (the bottom face is inset by c)
   const bedMinX = (p: number[]): number => {
@@ -2789,9 +3004,43 @@ const drawerBase = {
       square.parts[0].positions
     ).toFixed(1)} → ${bedMinX(bevelled.parts[0].positions).toFixed(1)} mm)`
   );
-  // the front panel is full width so its edges are the cube's front edges
+  // the cabinet's front face is a plain square — only the drawer fronts are
+  // chamfered there, so its corners reach the cabinet's outer silhouette and the
+  // old y+z=c front bevel is gone
+  {
+    const pos = d.parts[0].positions;
+    let fx0 = Infinity, fx1 = -Infinity, fy0 = Infinity, fy1 = -Infinity;
+    let oldBevel = 0;
+    const c3 = d.chamferMm;
+    for (let i = 0; i + 2 < pos.length; i += 3) {
+      // print space is (x, z, D − y), so the front face sits at pz = D
+      if (Math.abs(pos[i + 2] - drawerBase.cabinetDepthMm) < 1e-6) {
+        fx0 = Math.min(fx0, pos[i]);
+        fx1 = Math.max(fx1, pos[i]);
+        fy0 = Math.min(fy0, pos[i + 1]);
+        fy1 = Math.max(fy1, pos[i + 1]);
+      }
+      if (
+        Math.abs(pos[i] - c3) < 1e-6 &&
+        Math.abs(pos[i + 1] - c3) < 1e-6 &&
+        Math.abs(pos[i + 2] - drawerBase.cabinetDepthMm) < 1e-6
+      ) {
+        oldBevel++; // the (c, 0, c) corner of the old front bevel
+      }
+    }
+    check(
+      Math.abs(fx0) < 1e-6 &&
+        Math.abs(fx1 - drawerBase.cabinetWidthMm) < 1e-6 &&
+        Math.abs(fy0) < 1e-6 &&
+        Math.abs(fy1 - drawerBase.cabinetHeightMm) < 1e-6,
+      `the cabinet's front face is a plain square (${fx0.toFixed(0)}..${fx1.toFixed(
+        0
+      )} x ${fy0.toFixed(0)}..${fy1.toFixed(0)})`
+    );
+    check(oldBevel === 0, "the front bevel is carried by the drawer fronts only");
+  }
   const panelW = (r: ReturnType<typeof buildDrawers>): number => {
-    const p = r.parts[r.parts.length - 1].positions;
+    const p = r.parts.find((q) => q.name === "Front 1")!.positions;
     let x0 = Infinity, x1 = -Infinity;
     for (let i = 0; i < p.length; i += 3) {
       if (p[i] < x0) x0 = p[i];
@@ -2818,6 +3067,154 @@ const drawerBase = {
       chBad += r.parts.reduce((s, p) => s + drawDefects(p.positions), 0);
     }
     check(chBad === 0, `chamfers 0..3 mm stay watertight (${chBad} defects)`);
+  }
+
+  // each shelf is two side rails with the middle open (not a full slab), welded
+  // into the cabinet part
+  {
+    const cab = d.parts[0];
+    let midVertices = 0;
+    for (let i = 0; i < cab.positions.length; i += 3) {
+      const x = cab.positions[i];
+      if (
+        x > drawerBase.wallMm + drawerBase.shelfRailMm + 1 &&
+        x <
+          drawerBase.cabinetWidthMm -
+            drawerBase.wallMm -
+            drawerBase.shelfRailMm -
+            1
+      ) {
+        midVertices++;
+      }
+    }
+    check(
+      midVertices === 0,
+      `shelf rails are side rails, not full slabs (${midVertices} mid-span vertices)`
+    );
+  }
+  // the cube prints on its back: the back face on the bed and the opening up
+  {
+    const lying = buildDrawers({
+      ...drawerBase,
+      cabinetDepthMm: 60,
+      cabinetHeightMm: 110,
+    });
+    const cab = lying.parts[0].positions;
+    let z0 = Infinity,
+      z1 = -Infinity,
+      y1 = -Infinity;
+    for (let i = 0; i < cab.length; i += 3) {
+      if (cab[i + 2] < z0) z0 = cab[i + 2];
+      if (cab[i + 2] > z1) z1 = cab[i + 2];
+      if (cab[i + 1] > y1) y1 = cab[i + 1];
+    }
+    check(
+      Math.abs(z0) < 1e-6 &&
+        Math.abs(z1 - 60) < 1e-6 &&
+        Math.abs(y1 - 110) < 1e-6,
+      `cube lies on its back with the opening up (z ${z0.toFixed(0)}..${z1.toFixed(
+        0
+      )}, y up to ${y1.toFixed(0)})`
+    );
+    // ...and the opening really is on top: nothing spans the cavity up there
+    let overCavity = 0;
+    for (let i = 0; i < cab.length; i += 3) {
+      if (
+        cab[i + 2] > 59.5 &&
+        cab[i] > 15 &&
+        cab[i] < 135 &&
+        cab[i + 1] > 15 &&
+        cab[i + 1] < 95
+      ) {
+        overCavity++;
+      }
+    }
+    check(
+      overCavity === 0,
+      `the opening faces up (${overCavity} verts over the cavity top)`
+    );
+  }
+
+  // each drawer is a separate front + tray, joined by a dovetail cut into the
+  // tray's exposed wall ends (the tray's front is open — the panel closes it)
+  {
+    const FOFF = 150 + 6; // front column
+    const TOFF = 2 * 150 + 12; // tray column
+    const front = d.parts.find((p) => p.name === "Front 1")!;
+    const tray = d.parts.find((p) => p.name === "Tray 1")!;
+    const xsAt = (P: number[], y: number): number[] => {
+      const list: number[] = [];
+      for (let i = 0; i < P.length; i += 3)
+        if (Math.abs(P[i + 1] - y) < 1e-6) list.push(P[i]);
+      return list;
+    };
+    // centres of adjacent x pairs (a trapezoid's two base corners)
+    const centres = (v: number[]): number[] => {
+      const s = [...new Set(v.map((x) => +x.toFixed(4)))].sort((a, b) => a - b);
+      const c: number[] = [];
+      for (let i = 0; i + 1 < s.length; i += 2) c.push((s[i] + s[i + 1]) / 2);
+      return c;
+    };
+    // frontMm 5 -> dovetail depth = clamp(2.5, 1.2, 3) = 2.5
+    const gBase = xsAt(front.positions, 2.5).map((x) => x - FOFF);
+    check(
+      centres(gBase).length === 2,
+      `the front carries two dovetail grooves (${centres(gBase).length} pairs)`
+    );
+    const tTip = xsAt(tray.positions, -2.5).map((x) => x - TOFF);
+    let tMin = Infinity,
+      tMax = -Infinity;
+    for (let i = 0; i < tray.positions.length; i += 3) {
+      if (tray.positions[i + 1] < tMin) tMin = tray.positions[i + 1];
+      if (tray.positions[i + 1] > tMax) tMax = tray.positions[i + 1];
+    }
+    const trayDepth = 150 - 4 - 0.3; // openingD − fit
+    check(
+      centres(tTip).length === 2 && tMax - tMin > trayDepth + 1,
+      `the tray's wall ends carry matching tenons (depth ${(tMax - tMin).toFixed(
+        1
+      )} > ${trayDepth.toFixed(1)} mm)`
+    );
+    // the grooves sit over the tenons (the tray is centred under the panel)
+    const gc = centres(gBase);
+    const tc = centres(tTip);
+    const txo = 4.3; // (W − trayW) / 2
+    check(
+      gc.length === 2 &&
+        tc.length === 2 &&
+        gc.every((c, i) => Math.abs(c - tc[i] - txo) < 0.05),
+      `the grooves line up with the tenons (front ${gc.join(",")} vs tray ${tc.join(",")})`
+    );
+    // the tray's front is open: nothing spans the opening above the floor
+    let overOpening = 0;
+    for (let i = 0; i < tray.positions.length; i += 3) {
+      const x = tray.positions[i] - TOFF;
+      const y = tray.positions[i + 1];
+      const z = tray.positions[i + 2];
+      if (Math.abs(y) < 1e-6 && x > 20 && x < 130 && z > 3.5) overOpening++;
+    }
+    check(
+      overOpening === 0,
+      `the tray's front is open (${overOpening} verts across the opening)`
+    );
+  }
+  // hexagon-pattern tray walls add geometry but stay watertight
+  {
+    const hex = buildDrawers({
+      ...drawerBase,
+      trayWallStyle: "hex" as const,
+      hexMm: 10,
+    });
+    const tris = (r: ReturnType<typeof buildDrawers>): number =>
+      r.parts.reduce((s, p) => s + p.positions.length / 9, 0);
+    check(
+      tris(hex) > tris(d) + 100,
+      `hex tray walls add geometry (${tris(d)} → ${tris(hex)} triangles)`
+    );
+    check(
+      hex.parts.every((p) => drawDefects(p.positions) === 0),
+      "hex-walled trays stay watertight"
+    );
   }
 }
 
@@ -3003,11 +3400,99 @@ async function main() {
   const drawModel = await drawZip.file("3D/3dmodel.model")!.async("string");
   check(
     (drawModel.match(/<object /g) || []).length === drawCab.parts.length &&
-      /Drawer 1/.test(drawModel) &&
+      /Front 1/.test(drawModel) &&
+      /Tray 1/.test(drawModel) &&
       /Cabinet/.test(drawModel),
-    `drawer 3MF has ${drawCab.parts.length} objects (cabinet + shelves + drawers)`
+    `drawer 3MF has ${drawCab.parts.length} objects (cabinet + fronts + trays)`
   );
 
+
+// ---- smooth shape contours (contour snapping) ----------------------------
+{
+  const GW = 200;
+  const GH = 200;
+  const S = 0.5;
+  const sil = makeShapeSilhouette(
+    { type: "circle", cx: 0.5, cy: 0.5, size: 1 },
+    GW,
+    GH
+  );
+  const z0 = new Float32Array(GW * GH);
+  const z1 = new Float32Array(GW * GH);
+  for (let y = 0; y < GH; y++) {
+    for (let x = 0; x < GW; x++) {
+      if (sil.inside(x + 0.5, y + 0.5)) {
+        const i = y * GW + x;
+        z1[i] = 4;
+      }
+    }
+  }
+  const snap = shapeContourSnapper(sil, [0]);
+  const plain = buildSnappedHeightfieldGeometry(z0, z1, GW, GH, S, null);
+  const snapped = buildSnappedHeightfieldGeometry(z0, z1, GW, GH, S, snap);
+
+  // support function h(theta) = max over vertices of (v.u); constant for a
+  // circle, so its RMS deviation measures outline smoothness.
+  const supportRms = (V: number[]): number => {
+    const cx = (GW * S) / 2;
+    const cy = (GH * S) / 2;
+    const hs: number[] = [];
+    for (let t = 0; t < 360; t += 0.5) {
+      const ux = Math.cos((t * Math.PI) / 180);
+      const uy = Math.sin((t * Math.PI) / 180);
+      let h = -Infinity;
+      for (let i = 0; i < V.length; i += 3) {
+        const p = (V[i] - cx) * ux + (V[i + 1] - cy) * uy;
+        if (p > h) h = p;
+      }
+      hs.push(h);
+    }
+    const m = hs.reduce((a, b) => a + b, 0) / hs.length;
+    return Math.sqrt(hs.reduce((a, b) => a + (b - m) ** 2, 0) / hs.length);
+  };
+  const rPlain = supportRms(plain);
+  const rSnap = supportRms(snapped);
+  check(
+    rSnap < rPlain * 0.8 && rSnap < 0.15 * S,
+    `contour snapping smooths the circle outline (RMS ${rSnap.toFixed(4)} vs plain ${rPlain.toFixed(4)} mm)`
+  );
+  check(
+    analyzeEdges(snapped).holes === 0 && analyzeEdges(snapped).bad === 0,
+    "contour-snapped mesh is watertight"
+  );
+}
+
+// ---- box/frame wall is a clean cylinder, not a pixel sawtooth ------------
+{
+  const b = buildBox({ ...boxBase, shapeType: "circle", lid: "none", resolution: 240 });
+  const P = b.parts[0].positions;
+  const cx = (b.gw * b.pixelSizeMm) / 2;
+  const cy = (b.gh * b.pixelSizeMm) / 2;
+  let wall = 0;
+  let saw = 0;
+  for (let i = 0; i < P.length; i += 9) {
+    const ax = P[i], ay = P[i + 1], az = P[i + 2];
+    const bx = P[i + 3], by = P[i + 4], bz = P[i + 5];
+    const qx = P[i + 6], qy = P[i + 7], qz = P[i + 8];
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const vx = qx - ax, vy = qy - ay, vz = qz - az;
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    if (Math.abs(nz) > 0.3) continue; // not a vertical face
+    const mx = (ax + bx + qx) / 3 - cx;
+    const my = (ay + by + qy) / 3 - cy;
+    const ml = Math.hypot(mx, my) || 1;
+    const dot = (nx * mx + ny * my) / ml;
+    if (dot < 0.7) continue; // inward / not part of the outer wall
+    wall++;
+    if (Math.acos(Math.max(-1, Math.min(1, dot))) > (15 * Math.PI) / 180) saw++;
+  }
+  check(
+    wall > 500 && saw / wall < 0.03,
+    `circle box wall is a clean cylinder (${saw}/${wall} facets > 15 deg off radial)`
+  );
+}
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);

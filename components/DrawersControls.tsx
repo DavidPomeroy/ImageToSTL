@@ -12,6 +12,7 @@ export interface DrawersControlValues {
   floorMm: number;
   roofMm: number;
   shelfMm: number;
+  shelfRailMm: number;
   // drawers
   drawerCount: number;
   trayWallMm: number;
@@ -24,6 +25,9 @@ export interface DrawersControlValues {
   resolution: number;
   color: RGB;
   drawerColor: RGB;
+  frontColor: RGB;
+  trayWallStyle: "solid" | "hex";
+  hexMm: number;
 }
 
 export default function DrawersControls({
@@ -111,10 +115,22 @@ export default function DrawersControls({
         unit=" mm"
         onChange={(shelfMm) => patch({ shelfMm })}
       />
+      <Slider
+        label="Shelf rail width"
+        value={v.shelfRailMm}
+        min={2}
+        max={40}
+        step={1}
+        unit=" mm"
+        onChange={(shelfRailMm) => patch({ shelfRailMm })}
+      />
       <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
-        The cabinet is printed upright with the drawers beside it. The interior
-        (height − floor − roof − shelves) is split evenly into{" "}
-        {v.drawerCount} compartment{v.drawerCount > 1 ? "s" : ""}.
+        Each shelf is two side rails (this wide) rather than a full slab, so the
+        drawer tray rests on them and the middle of the compartment stays open.
+        The cube prints on its back with the opening facing up, so nothing
+        bridges over the cavity. The interior (height − floor − roof − shelves)
+        is split evenly into {v.drawerCount} compartment
+        {v.drawerCount > 1 ? "s" : ""}.
       </p>
 
       <Slider
@@ -135,6 +151,39 @@ export default function DrawersControls({
         unit=" mm"
         onChange={(trayFloorMm) => patch({ trayFloorMm })}
       />
+      <label className="block">
+        <span className="mb-1 block text-sm text-zinc-300">
+          Tray side / back walls
+        </span>
+        <select
+          value={v.trayWallStyle}
+          onChange={(e) =>
+            patch({ trayWallStyle: e.target.value as "solid" | "hex" })
+          }
+          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200"
+        >
+          <option value="solid">Solid</option>
+          <option value="hex">Hexagon pattern (saves filament)</option>
+        </select>
+      </label>
+      {v.trayWallStyle === "hex" && (
+        <Slider
+          label="Hexagon size"
+          value={v.hexMm}
+          min={4}
+          max={25}
+          step={0.5}
+          unit=" mm"
+          onChange={(hexMm) => patch({ hexMm })}
+        />
+      )}
+      <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
+        The tray is open at the front — the drawer front closes it, and each side
+        wall&apos;s exposed end is cut with the dovetail that locks the two
+        together. The left, right and back walls can be perforated with a hex
+        honeycomb (the hole size above; a web is left between the holes) to use
+        less filament.
+      </p>
       <Slider
         label="Front panel thickness"
         value={v.frontMm}
@@ -154,9 +203,10 @@ export default function DrawersControls({
         onChange={(chamferMm) => patch({ chamferMm })}
       />
       <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
-        A straight 45° chamfer on the cube&apos;s outer edges. The drawer fronts
-        are full width and carry the same chamfer, so a closed cabinet reads as
-        one beveled cube. Limited by the thinnest wall / floor / roof / front.
+        A straight 45° chamfer on the cube&apos;s outer edges, fading out at the
+        front face — the front stays square and the drawer fronts carry the
+        bevel, so a closed cabinet reads as one beveled cube. Limited by the
+        thinnest wall / floor / roof / front.
       </p>
       <Slider
         label="Drawer fit clearance"
@@ -192,9 +242,14 @@ export default function DrawersControls({
         onChange={(color) => patch({ color })}
       />
       <Swatch
-        label="Drawer colour"
+        label="Drawer tray colour"
         color={v.drawerColor}
         onChange={(drawerColor) => patch({ drawerColor })}
+      />
+      <Swatch
+        label="Drawer front colour"
+        color={v.frontColor}
+        onChange={(frontColor) => patch({ frontColor })}
       />
     </div>
   );

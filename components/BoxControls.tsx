@@ -20,7 +20,7 @@ export interface BoxControlValues {
   overhangMm: number;
   clearanceMm: number;
   plugDepthMm: number;
-  plugBevelDeg: number;
+  plugChamferMm: number;
   hingeClearanceMm: number;
   // output
   resolution: number;
@@ -160,14 +160,19 @@ export default function BoxControls({
             onChange={(plugDepthMm) => patch({ plugDepthMm })}
           />
           <Slider
-            label="Plug bevel"
-            value={v.plugBevelDeg}
+            label="Plug chamfer"
+            value={v.plugChamferMm}
             min={0}
-            max={45}
-            step={5}
-            unit="°"
-            onChange={(plugBevelDeg) => patch({ plugBevelDeg })}
+            max={Math.max(1, v.plugDepthMm)}
+            step={0.5}
+            unit=" mm"
+            onChange={(plugChamferMm) => patch({ plugChamferMm })}
           />
+          <p className="-mt-2 text-xs leading-relaxed text-zinc-500">
+            A straight 45° chamfer on the plug&apos;s leading edge, so it eases
+            into the opening and stays self-supporting when the lid is printed
+            plug-down. Max = the plug depth.
+          </p>
         </>
       )}
       {v.lid === "separate" && (

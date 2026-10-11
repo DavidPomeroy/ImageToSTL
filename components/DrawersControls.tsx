@@ -203,10 +203,11 @@ export default function DrawersControls({
         onChange={(chamferMm) => patch({ chamferMm })}
       />
       <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
-        A straight 45° chamfer on the cube&apos;s outer edges, fading out at the
-        front face — the front stays square and the drawer fronts carry the
-        bevel, so a closed cabinet reads as one beveled cube. Limited by the
-        thinnest wall / floor / roof / front.
+        A straight 45° chamfer on the cube&apos;s outer edges. The cabinet&apos;s
+        own front face stays square behind the drawer fronts; the fronts fill that
+        front slab and carry the chamfer there — the top and bottom panels&apos;
+        outer ends included — so a closed chest is one chamfered cube. Limited by
+        the thinnest wall / floor / roof / front.
       </p>
       <Slider
         label="Drawer fit clearance"

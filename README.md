@@ -348,11 +348,14 @@ on); print the plate from the Image → 3D tool separately and seat it in the li
 A freestanding **chest of drawers** built from a few parameters — no image
 needed. The cabinet is an open-front box (floor + left/right/back walls + roof)
 divided by (N − 1) shelves into **1–8 compartments**. Each drawer is **two
-printed parts**: a full-width **front panel**, and an open-top tray that is
-**open at the front too** (the panel closes it). The panel's back carries
-dovetail **grooves** that slide onto **tenons cut into the tray's exposed side
-wall ends**, so the front can take its own colour and the tray walls can be
-lightened (see below). Fronts and trays are laid out beside the cabinet, and the
+printed parts**: a **front panel** and an open-top tray that is **open at the
+front too** (the panel closes it). The panel's back carries dovetail **grooves**
+that slide onto **tenons cut into the tray's exposed side wall ends**, so the
+front can take its own colour and the tray walls can be lightened (see below).
+The panels sit **in** the cube's front face, flush with the front plane — the
+cabinet's shell is held back by their thickness — and the outermost two carry
+the cube's **top/bottom chamfer**, so a closed chest is a plain chamfered cube.
+Fronts and trays are laid out beside the cabinet, and the
 page shows **two 3D previews**: that print layout, and the chest **assembled**
 (both previews share the one viewer — the assembled one feeds it the parts in the
 model's own space, so it stands upright with the drawers pushed home, and its
@@ -384,15 +387,14 @@ support-free.
   dovetail tenons.
 - **Drawer front colour / drawer tray colour** — the fronts and trays print as
   separate parts, so each takes its own filament.
-- **Chamfer (cube edges)** — a straight **45° chamfer** on the cabinet's outer
-  edges, which **fades out at the front face**: the front stays a plain square
-  and the **drawer fronts** carry the bevel there (their front edges are full
-  width, cut back at 45°), so a closed cabinet still reads as one beveled cube.
-  Over the first `c` mm behind the front the cut ramps in from nothing, meeting
-  the full bevel exactly, so there is no step. The chamfer is clamped to the
-  thinnest of the wall / floor / roof / front panel (a warning appears if it had
-  to be reduced). 0&nbsp;mm gives the plain square box. The chamfer overhangs at
-  the bed, so print with a brim.
+- **Chamfer (cube edges)** — a straight **45° chamfer** on the cube's outer
+  edges. The cabinet's own front face is held back by the front panel's
+  thickness and stays **square**; the **drawer fronts** fill that front slab and
+  carry the chamfer there — the outer ends of the topmost and bottom panels
+  included — so a closed chest reads as one chamfered cube with nothing proud of
+  it. The chamfer is clamped to the thinnest of the wall / floor / roof / front
+  panel (a warning appears if it had to be reduced). 0&nbsp;mm gives the plain
+  square box. The chamfer overhangs at the bed, so print with a brim.
 - **Drawer fit clearance** — the gap between a drawer and its opening, per
   enclosed side (0.2–0.4&nbsp;mm suits most FDM printers).
 - **Drawer vertical gap** — play around a drawer: it keeps the tray clear of its
@@ -402,23 +404,25 @@ support-free.
 
 **How it is built** — a heightfield cannot slope an outer face (its side walls
 are always vertical) and can only staircase a corner, so the cabinet is built as
-**one explicit closed polyhedron**: the cabinet's 6 faces — bottom, top, left and
+**one explicit closed polyhedron**: the shell's 6 faces — bottom, top, left and
 right are hexagons (earcut-triangulated) that fan out to the full front square,
 while the bevel ramps in over the front collar — plus 8 edge-chamfer rectangles
 and 4 back corner triangles, with the front cavity cut as a rectangular pocket
 (the front face becomes a ring, triangulated with `earcut`), with each shelf's
-two exact **side-rail** boxes (not a full slab) welded into the same mesh, and
-the whole cube is then rotated so its back rests on the bed and the opening faces
-up. Each drawer is an explicit **full-width front panel** (two front vertical
-corners cut by the chamfer, with dovetail **grooves** in its back, sized to its
-compartment **plus half of each dividing shelf** so the panels almost touch and
-the outermost ones reach the cabinet's bottom and top faces) and an explicit
-**open-top, open-front tray**:
-a floor plus three walls, each side wall's exposed front end cut into the
-matching dovetail **tenon**. Both grooves and tenons run along Z (the print's up
-axis), so every joint face stays vertical and prints support-free; the panel
-simply drops onto the tray's wall ends, with the fit clearance. Front and tray
-print as **separate parts**, in columns beside the cabinet (a 6&nbsp;mm gap
+two exact **side-rail** boxes (not a full slab) welded into the same mesh. The
+shell is then shifted back by the front panel's thickness, so the panels — not
+the cabinet — form the cube's front slab, and the whole cube is rotated so its
+back rests on the bed and the opening faces up. Each drawer is an explicit
+**front panel** (its front face inset by the chamfer on all four sides — the
+top/bottom cuts only on the outermost drawers, where they'd otherwise leave a
+square lip — with dovetail **grooves** in its back, sized to its compartment
+**plus half of each dividing shelf** so the panels almost touch and the outermost
+ones reach the cube's bottom and top faces) and an explicit **open-top,
+open-front tray**: a floor plus three walls, each side wall's exposed front end
+cut into the matching dovetail **tenon**. Both grooves and tenons run along Z (the
+print's up axis), so every joint face stays vertical and prints support-free; the
+panel simply drops onto the tray's wall ends, with the fit clearance. Front and
+tray print as **separate parts**, in columns beside the cabinet (a 6&nbsp;mm gap
 each) in the flat orientation.
 Import as one object
 with multiple parts: each part takes one extruder colour. (The mesh-level

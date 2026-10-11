@@ -2817,8 +2817,13 @@ const drawerBase = {
       `assembled pose = cabinet + N fronts + N trays (${a.length})`
     );
     check(
-      fronts.every((p) => Math.abs(span(p.positions, 1)[1]) < 1e-6),
-      "assembled fronts sit flush on the cabinet's front face"
+      fronts.every((p) => {
+        const [y0, y1] = span(p.positions, 1);
+        return (
+          Math.abs(y0) < 1e-6 && Math.abs(y1 - drawerBase.frontMm) < 1e-6
+        );
+      }),
+      "assembled fronts fill the cube's front slab, flush with the front plane"
     );
     // the fronts cover the whole front: the bottom one starts at the cabinet's
     // floor, the top one ends at its roof, and only `gap` sits between them —
@@ -2869,10 +2874,9 @@ const drawerBase = {
         const [x0, x1] = span(p.positions, 0);
         const [y0, y1] = span(p.positions, 1);
         return (
-          // the tenons reach forward into the panel's groove …
-          y0 < -1e-6 &&
-          // … without poking through its front face,
-          y0 >= -(drawerBase.frontMm + 1e-6) &&
+          // the tenons reach back into the panel's groove …
+          y0 > 1e-6 &&
+          y0 < drawerBase.frontMm - 1e-6 &&
           // and the tray itself stays inside the cavity
           y1 <= drawerBase.cabinetDepthMm - drawerBase.wallMm + 1e-6 &&
           Math.abs(x0 - (drawerBase.cabinetWidthMm - trayW) / 2) < 1e-6 &&
@@ -2894,12 +2898,9 @@ const drawerBase = {
     );
     check(
       Math.abs(d.assembled.bboxMm.x - drawerBase.cabinetWidthMm) < 1e-6 &&
-        Math.abs(
-          d.assembled.bboxMm.y -
-            (drawerBase.cabinetDepthMm + drawerBase.frontMm)
-        ) < 1e-6 &&
+        Math.abs(d.assembled.bboxMm.y - drawerBase.cabinetDepthMm) < 1e-6 &&
         Math.abs(d.assembled.bboxMm.z - drawerBase.cabinetHeightMm) < 1e-6,
-      `assembled chest bounds = cabinet + proud fronts (${d.assembled.bboxMm.x.toFixed(1)} x ${d.assembled.bboxMm.y.toFixed(1)} x ${d.assembled.bboxMm.z.toFixed(1)} mm)`
+      `a closed chest is exactly the cube (${d.assembled.bboxMm.x.toFixed(1)} x ${d.assembled.bboxMm.y.toFixed(1)} x ${d.assembled.bboxMm.z.toFixed(1)} mm)`
     );
   }
   check(
@@ -3004,29 +3005,20 @@ const drawerBase = {
       square.parts[0].positions
     ).toFixed(1)} → ${bedMinX(bevelled.parts[0].positions).toFixed(1)} mm)`
   );
-  // the cabinet's front face is a plain square — only the drawer fronts are
-  // chamfered there, so its corners reach the cabinet's outer silhouette and the
-  // old y+z=c front bevel is gone
+  // the cabinet's own front face (held `frontMm` back, behind the drawer fronts)
+  // is a plain square — the bevel ramps in behind it — so the cube's front
+  // chamfers come from the drawer fronts
   {
     const pos = d.parts[0].positions;
+    const shellFront = drawerBase.cabinetDepthMm - drawerBase.frontMm;
     let fx0 = Infinity, fx1 = -Infinity, fy0 = Infinity, fy1 = -Infinity;
-    let oldBevel = 0;
-    const c3 = d.chamferMm;
     for (let i = 0; i + 2 < pos.length; i += 3) {
-      // print space is (x, z, D − y), so the front face sits at pz = D
-      if (Math.abs(pos[i + 2] - drawerBase.cabinetDepthMm) < 1e-6) {
-        fx0 = Math.min(fx0, pos[i]);
-        fx1 = Math.max(fx1, pos[i]);
-        fy0 = Math.min(fy0, pos[i + 1]);
-        fy1 = Math.max(fy1, pos[i + 1]);
-      }
-      if (
-        Math.abs(pos[i] - c3) < 1e-6 &&
-        Math.abs(pos[i + 1] - c3) < 1e-6 &&
-        Math.abs(pos[i + 2] - drawerBase.cabinetDepthMm) < 1e-6
-      ) {
-        oldBevel++; // the (c, 0, c) corner of the old front bevel
-      }
+      // print space is (x, z, D − y), so the shell's front face is at pz = D − front
+      if (Math.abs(pos[i + 2] - shellFront) > 1e-6) continue;
+      fx0 = Math.min(fx0, pos[i]);
+      fx1 = Math.max(fx1, pos[i]);
+      fy0 = Math.min(fy0, pos[i + 1]);
+      fy1 = Math.max(fy1, pos[i + 1]);
     }
     check(
       Math.abs(fx0) < 1e-6 &&
@@ -3037,7 +3029,39 @@ const drawerBase = {
         0
       )} x ${fy0.toFixed(0)}..${fy1.toFixed(0)})`
     );
-    check(oldBevel === 0, "the front bevel is carried by the drawer fronts only");
+  }
+  // ...and the cube's front chamfers come from the drawer fronts: the outermost
+  // panels are cut back at their outer ends, the middle ones stay square
+  {
+    // panels are laid out unrotated: print y = thickness, print z = height
+    const ends = (P: number[]) => {
+      let yMin = Infinity;
+      for (let i = 1; i < P.length; i += 3) yMin = Math.min(yMin, P[i]);
+      let lo = Infinity, hi = -Infinity, loFront = Infinity, hiFront = -Infinity;
+      for (let i = 0; i + 2 < P.length; i += 3) {
+        const z = P[i + 2];
+        lo = Math.min(lo, z);
+        hi = Math.max(hi, z);
+        if (Math.abs(P[i + 1] - yMin) < 1e-6) {
+          loFront = Math.min(loFront, z); // its front face
+          hiFront = Math.max(hiFront, z);
+        }
+      }
+      return { lo, hi, loFront, hiFront };
+    };
+    const panel = (n: string) => d.parts.find((p) => p.name === n)!.positions;
+    const top = ends(panel("Front 3"));
+    const mid = ends(panel("Front 2"));
+    const bot = ends(panel("Front 1"));
+    check(
+      top.hi - top.hiFront > 0.5 &&
+        bot.loFront - bot.lo > 0.5 &&
+        Math.abs(mid.hi - mid.hiFront) < 1e-6 &&
+        Math.abs(mid.loFront - mid.lo) < 1e-6,
+      `the outermost fronts carry the cube's end chamfers (top ${(
+        top.hi - top.hiFront
+      ).toFixed(1)}, bottom ${(bot.loFront - bot.lo).toFixed(1)} mm)`
+    );
   }
   const panelW = (r: ReturnType<typeof buildDrawers>): number => {
     const p = r.parts.find((q) => q.name === "Front 1")!.positions;
@@ -3108,9 +3132,11 @@ const drawerBase = {
       if (cab[i + 2] > z1) z1 = cab[i + 2];
       if (cab[i + 1] > y1) y1 = cab[i + 1];
     }
+    // the shell's front face is held `frontMm` back (the drawer fronts fill that
+    // slab), so its own thickness is the cabinet depth minus the front panel
     check(
       Math.abs(z0) < 1e-6 &&
-        Math.abs(z1 - 60) < 1e-6 &&
+        Math.abs(z1 - (60 - drawerBase.frontMm)) < 1e-6 &&
         Math.abs(y1 - 110) < 1e-6,
       `cube lies on its back with the opening up (z ${z0.toFixed(0)}..${z1.toFixed(
         0
@@ -3155,20 +3181,33 @@ const drawerBase = {
       for (let i = 0; i + 1 < s.length; i += 2) c.push((s[i] + s[i + 1]) / 2);
       return c;
     };
-    // frontMm 5 -> dovetail depth = clamp(2.5, 1.2, 3) = 2.5
-    const gBase = xsAt(front.positions, 2.5).map((x) => x - FOFF);
+    // frontMm 5, chamfer 3 -> dovetail depth = clamp(min(2.5, 5 − 3 − 0.2), 1.2, 3)
+    const dvDepth = Math.max(
+      1.2,
+      Math.min(
+        3,
+        Math.min(drawerBase.frontMm * 0.5, drawerBase.frontMm - 3 - 0.2)
+      )
+    );
+    const gBase = xsAt(front.positions, drawerBase.frontMm - dvDepth).map((x) => x - FOFF);
     check(
       centres(gBase).length === 2,
       `the front carries two dovetail grooves (${centres(gBase).length} pairs)`
     );
-    const tTip = xsAt(tray.positions, -2.5).map((x) => x - TOFF);
+    const tTip = xsAt(tray.positions, -dvDepth).map((x) => x - TOFF);
     let tMin = Infinity,
       tMax = -Infinity;
     for (let i = 0; i < tray.positions.length; i += 3) {
       if (tray.positions[i + 1] < tMin) tMin = tray.positions[i + 1];
       if (tray.positions[i + 1] > tMax) tMax = tray.positions[i + 1];
     }
-    const trayDepth = 150 - 4 - 0.3; // openingD − fit
+    // the tray runs from the panel's back face into the cavity: opening depth
+    // (D − wall − frontMm) minus the fit clearance, plus the tenon's reach
+    const trayDepth =
+      drawerBase.cabinetDepthMm -
+      drawerBase.wallMm -
+      drawerBase.frontMm -
+      drawerBase.fitClearanceMm;
     check(
       centres(tTip).length === 2 && tMax - tMin > trayDepth + 1,
       `the tray's wall ends carry matching tenons (depth ${(tMax - tMin).toFixed(

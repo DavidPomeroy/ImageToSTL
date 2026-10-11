@@ -576,34 +576,69 @@ function pushHoleyWall(
 
 /**
  * A drawer front panel: a rectangular prism (X 0..W, Y 0..depth, Z 0..height)
- * with its two front vertical corners cut by `c` — so when the drawer is closed
- * it continues the cube's front vertical chamfers. Its back (y = depth) carries
- * one or more dovetail GROOVES (`grooves`), open at both ends, that the tray's
- * matching dovetail ribs slide into.
+ * *inset into* the cube's front face — it occupies the front `depth` mm of the
+ * box, flush with the front plane — with 45° chamfers `c` on the four edges of
+ * its front face, so a closed chest reads as one chamfered cube. The top/bottom
+ * chamfers are only wanted on the outermost drawers (`bevelTop`/`bevelBottom`);
+ * the middle panels butt against a shelf, so their ends stay square. Its back
+ * (y = depth) carries the dovetail GROOVES the tray's tenons slide into.
+ *
+ * The side chamfers come straight out of the section; the top/bottom ones clip
+ * the extruded ends, and stop short of the grooves so the cut face stays a plain
+ * trapezoid.
  */
 function buildDrawerPanel(
   W: number,
   depth: number,
   height: number,
   c: number,
-  grooves: Dovetail[]
+  grooves: Dovetail[],
+  bevelTop: boolean,
+  bevelBottom: boolean
 ): number[] {
   const out: number[] = [];
+  const sorted = [...grooves].sort((a, b) => a.cx - b.cx);
+  const deepest = sorted.reduce((m, g) => Math.max(m, g.depth), 0);
+  // how deep the end cuts go: `c`, but never into a groove's channel
+  const cut = Math.min(c, Math.max(0, depth - deepest - 0.2));
+  const topCut = bevelTop ? cut : 0;
+  const botCut = bevelBottom ? cut : 0;
+  const zTop = (y: number) => height - Math.max(0, topCut - y);
+  const zBot = (y: number) => Math.max(0, botCut - y);
+
+  // section edges, split where the end cuts begin so every face stays planar
   const sec: [number, number][] = [[0, c], [0, depth]];
-  for (const g of [...grooves].sort((a, b) => a.cx - b.cx)) {
-    sec.push([g.cx - g.neck, depth]);
-    sec.push([g.cx - g.head, depth - g.depth]);
-    sec.push([g.cx + g.head, depth - g.depth]);
-    sec.push([g.cx + g.neck, depth]);
-  }
-  sec.push([W, depth], [W, c], [W - c, 0], [c, 0]);
-  // caps use earcut: the section is no longer convex once it has keyholes
-  pushPolygonZ(out, sec, 0, [0, 0, -1]);
-  pushPolygonZ(out, sec, height, [0, 0, 1]);
+  const pushGrooves = (s: [number, number][]) => {
+    for (const g of sorted) {
+      s.push([g.cx - g.neck, depth]);
+      s.push([g.cx - g.head, depth - g.depth]);
+      s.push([g.cx + g.head, depth - g.depth]);
+      s.push([g.cx + g.neck, depth]);
+    }
+  };
+  pushGrooves(sec);
+  sec.push([W, depth], [W, c]);
+  if (cut > 0) sec.push([W - c + cut, cut]);
+  sec.push([W - c, 0], [c, 0]);
+  if (cut > 0) sec.push([c - cut, cut]);
+
+  // caps (earcut): where an end is cut the cap is the section clipped to y ≥ cut
+  const cap = (z: number, dir: V3, bevelled: boolean) => {
+    if (!bevelled) {
+      pushPolygonZ(out, sec, z, dir);
+      return;
+    }
+    const s: [number, number][] = [[0, c], [0, depth]];
+    pushGrooves(s);
+    s.push([W, depth], [W, c], [W - c + cut, cut], [c - cut, cut]);
+    pushPolygonZ(out, s, z, dir);
+  };
+  cap(0, [0, 0, -1], botCut > 0);
+  cap(height, [0, 0, 1], topCut > 0);
+
   // Side walls: the winding comes from the section itself. `pushOriented`'s
-  // interior-point guess cannot be used here — a groove's floor sits at
-  // `depth - g.depth`, which for `dvDepth = frontThk / 2` is exactly the panel's
-  // mid-plane, i.e. it contains C, so the dot product is 0 and the inward
+  // interior-point guess cannot be used here — a groove's floor sits at the
+  // panel's mid-plane, which contains C, so the dot product is 0 and the inward
   // winding would survive making the groove render see-through.
   let area2 = 0;
   for (let i = 0; i < sec.length; i++) {
@@ -621,12 +656,38 @@ function buildDrawerPanel(
     pushFace(
       out,
       [
-        [a[0], a[1], 0],
-        [b[0], b[1], 0],
-        [b[0], b[1], height],
-        [a[0], a[1], height],
+        [a[0], a[1], zBot(a[1])],
+        [b[0], b[1], zBot(b[1])],
+        [b[0], b[1], zTop(b[1])],
+        [a[0], a[1], zTop(a[1])],
       ],
       ccw ? [dy, -dx, 0] : [-dy, dx, 0]
+    );
+  }
+
+  // the two end cuts themselves, in the planes z = height − cut + y / z = cut − y
+  if (topCut > 0) {
+    pushFace(
+      out,
+      [
+        [c, 0, height - topCut],
+        [W - c, 0, height - topCut],
+        [W - c + topCut, topCut, height],
+        [c - topCut, topCut, height],
+      ],
+      [0, -1, 1]
+    );
+  }
+  if (botCut > 0) {
+    pushFace(
+      out,
+      [
+        [c, 0, botCut],
+        [W - c, 0, botCut],
+        [W - c + botCut, botCut, 0],
+        [c - botCut, botCut, 0],
+      ],
+      [0, -1, -1]
     );
   }
   return out;
@@ -885,6 +946,12 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   const py1 = D - wall;
   const pz0 = floorThk;
   const pz1 = H - roofThk;
+  // The drawer fronts sit *in* the cube's front face — they occupy the front
+  // `frontThk` mm and are flush with the front plane — so the cabinet's shell
+  // starts that far back. It is built in its own frame (front face at y = 0) and
+  // shifted into place below, which keeps the chamfer/pocket maths unchanged.
+  const shellD = Math.max(wall + 1, D - frontThk);
+  const shellPy = Math.max(1, py1 - frontThk);
 
   // Print orientation: the cube lies on its back, so its back face rests on the
   // bed and the opening faces up. The roof / floor become vertical walls and the
@@ -903,7 +970,17 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   // ---- cabinet: one explicit chamfered solid with a front pocket. The soup is
   // kept in the model's own space (x = width, y = depth, z = height) so the
   // assembled preview can drop the drawers into it; the printed part rotates it.
-  const cabinetSoup = buildChamferedCabinet(W, D, H, c, px0, px1, py1, pz0, pz1);
+  const cabinetSoup = buildChamferedCabinet(
+    W,
+    shellD,
+    H,
+    c,
+    px0,
+    px1,
+    shellPy,
+    pz0,
+    pz1
+  );
 
   const parts: DrawersPart[] = [
     { name: "Cabinet", color: input.color, positions: orient(cabinetSoup) },
@@ -940,20 +1017,24 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     const shelfSoup: number[] = [];
     for (let k = 0; k < N - 1; k++) {
       const z0 = pz0 + k * (ch + shelfThk) + ch;
-      pushBox(shelfSoup, px0 - overlap, px0 + rail, 0, py1 + overlap, z0, z0 + shelfThk);
-      pushBox(shelfSoup, px1 - rail, px1 + overlap, 0, py1 + overlap, z0, z0 + shelfThk);
+      pushBox(shelfSoup, px0 - overlap, px0 + rail, 0, shellPy + overlap, z0, z0 + shelfThk);
+      pushBox(shelfSoup, px1 - rail, px1 + overlap, 0, shellPy + overlap, z0, z0 + shelfThk);
     }
     // The shelves are the same colour as the cabinet, so they are welded into
     // its mesh (overlapping the walls) rather than exported as their own object.
     for (const v of shelfSoup) cabinetSoup.push(v);
-    parts[0].positions = orient(cabinetSoup);
   }
+  // shift the shell (and its shelves) back: the drawer fronts fill the cube's
+  // front slab, flush with the front plane
+  for (let i = 1; i < cabinetSoup.length; i += 3) cabinetSoup[i] += frontThk;
+  parts[0].positions = orient(cabinetSoup);
 
   // ---- drawers: a separate full-width front + an open tray, joined by a
   // dovetail (fronts and trays print as their own parts, one colour each) ----
   const openingW = px1 - px0;
-  const openingD = py1;
+  const openingD = shellPy;
   const trayW = Math.max(pixelSize, openingW - 2 * fit);
+  // the tray runs from the panel's back face (y = frontThk) into the cavity
   const trayD = Math.max(pixelSize, openingD - fit);
   const tx = (W - trayW) / 2;
 
@@ -962,7 +1043,11 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   // front panel's back carries the matching groove. Both run along Z (the
   // print's up axis), so every joint face is vertical and prints support-free;
   // `dvClr` (the drawer fit clearance) lets them slide together after printing.
-  const dvDepth = clamp(frontThk * 0.5, 1.2, 3); // tenon groove depth in the panel
+  const dvDepth = clamp(
+    Math.min(frontThk * 0.5, frontThk - c - 0.2), // leaves room for the end cut
+    1.2,
+    3
+  ); // tenon groove depth in the panel
   const dvClr = Math.max(0.3, fit);
   const half = trayWall / 2;
   const tenonNeck = Math.max(0.25, half - Math.min(0.8, half * 0.5));
@@ -1007,7 +1092,17 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   ];
   for (let k = 0; k < N; k++) {
     const [fz0, fz1] = frontZ(k);
-    const panelLocal = buildDrawerPanel(W, frontThk, fz1 - fz0, c, grooves);
+    // the outermost fronts carry the cube's top/bottom chamfer; the middle ones
+    // butt against a shelf, so their ends stay square
+    const panelLocal = buildDrawerPanel(
+      W,
+      frontThk,
+      fz1 - fz0,
+      c,
+      grooves,
+      k === N - 1,
+      k === 0
+    );
     const dy = k * (drawerDmm + LAYOUT_GAP);
     // fronts in one column beside the cabinet, their trays in the next column
     const fPos = panelLocal.slice();
@@ -1031,9 +1126,12 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
       positions: tPos,
     });
 
+    // assembled: the panel *is* the cube's front slab — it sits flush in the
+    // front plane (y 0..frontThk) — and the tray slides in behind it, its wall
+    // ends flat against the panel's back face, centred by `tx`, sat on the
+    // compartment floor.
     const aPos = panelLocal.slice();
     for (let i = 0; i < aPos.length; i += 3) {
-      aPos[i + 1] -= frontThk;
       aPos[i + 2] += fz0;
     }
     assembledParts.push({
@@ -1044,6 +1142,7 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     const aTray = trayLocal.slice();
     for (let i = 0; i < aTray.length; i += 3) {
       aTray[i] += tx;
+      aTray[i + 1] += frontThk;
       aTray[i + 2] += pz0 + k * (ch + shelfThk);
     }
     assembledParts.push({
@@ -1069,8 +1168,11 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   const preview = new Uint8ClampedArray(n * 4);
   const col = input.color;
   const wallAt = (x: number, y: number): number => {
-    if (!insideOct(x, y, W, D, c)) return 0;
-    const inCavity = x >= px0 && x <= px1 && y >= 0 && y <= py1;
+    // the shell starts `frontThk` behind the front plane (the drawer fronts fill
+    // that slab), so the front cross-section is reported right up to the plane
+    const sy = Math.max(y, frontThk);
+    if (!insideOct(x, sy, W, D, c)) return 0;
+    const inCavity = x >= px0 && x <= px1 && sy >= frontThk && sy <= py1;
     return inCavity ? floorThk : H;
   };
   for (let j = 0; j < gh; j++) {

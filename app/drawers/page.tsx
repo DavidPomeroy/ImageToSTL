@@ -9,6 +9,9 @@ import DrawersControls, {
 import { LoadingOverlay, Spinner } from "@/components/Spinner";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 import { buildDrawers, type DrawersResult } from "@/lib/drawers";
+import type { DecorInput } from "@/lib/decor";
+import { detectDesignPalette, designFromPixels, readDesignPixels } from "@/lib/decorRaster";
+import type { RGB } from "@/lib/quantize";
 
 const PreviewGeneric = dynamic(() => import("@/components/PreviewGeneric"), {
   ssr: false,
@@ -55,6 +58,16 @@ const DEFAULT_CFG: DrawersControlValues = {
   chamferMm: 3,
   fitClearanceMm: 0.3,
   gapMm: 0.4,
+  decorFaces: ["front"],
+  decorRecessMm: 1.2,
+  decorProudMm: 0,
+  decorClearanceMm: 0,
+  decorSizePct: 0.8,
+  decorResolution: 128,
+  decorColorCount: 4,
+  decorBackgroundInlay: true,
+  decorBackground: "face",
+  decorInlay: [],
   resolution: 200,
   color: [245, 200, 30],
   drawerColor: [240, 240, 240],
@@ -109,7 +122,93 @@ export default function DrawersPage() {
   const [processing, setProcessing] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
 
+  // ---- decoration: the uploaded image, its palette and its design grid ----
+  const [decorImage, setDecorImage] = useState<HTMLImageElement | null>(null);
+  const [decorName, setDecorName] = useState<string | null>(null);
+  const [decorPalette, setDecorPalette] = useState<RGB[]>([]);
+  const [decorCounts, setDecorCounts] = useState<number[]>([]);
+
   const debCfg = useDebouncedValue(cfg, 160);
+  const debDecorRes = useDebouncedValue(cfg.decorResolution, 160);
+
+  const onDecorFile = useCallback((file: File) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      setDecorImage(img);
+      setDecorName(file.name.replace(/\.[^.]+$/, "") || "image");
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  }, []);
+
+  const removeDecor = useCallback(() => {
+    setDecorImage(null);
+    setDecorName(null);
+    setDecorPalette([]);
+    setDecorCounts([]);
+  }, []);
+
+  // colours are detected once per image (and colour count), so editing a swatch
+  // or nudging the design resolution does not throw the palette away
+  const decorDetect = useMemo(
+    () => (decorImage ? readDesignPixels(decorImage, 96) : null),
+    [decorImage]
+  );
+  useEffect(() => {
+    if (!decorDetect) return;
+    const { palette, counts } = detectDesignPalette(decorDetect, cfg.decorColorCount);
+    setDecorPalette(palette);
+    setDecorCounts(counts);
+    // the commonest colour is the face itself, the rest inlay — the user can
+    // flip any of them
+    let commonest = -1;
+    let best = -1;
+    counts.forEach((n, i) => {
+      if (n > best) {
+        best = n;
+        commonest = i;
+      }
+    });
+    setCfg((c) => ({ ...c, decorInlay: palette.map((_, i) => i !== commonest) }));
+  }, [decorDetect, cfg.decorColorCount]);
+
+  const decorDesign = useMemo(
+    () =>
+      decorImage && decorPalette.length > 0
+        ? designFromPixels(readDesignPixels(decorImage, debDecorRes), decorPalette)
+        : null,
+    [decorImage, debDecorRes, decorPalette]
+  );
+
+  const decor = useMemo((): DecorInput | undefined => {
+    if (!decorDesign || cfg.decorFaces.length === 0) return undefined;
+    return {
+      design: decorDesign,
+      palette: decorPalette,
+      inlay: decorPalette.map((_, i) => cfg.decorInlay[i] === true),
+      faces: cfg.decorFaces,
+      recessMm: cfg.decorRecessMm,
+      proudMm: cfg.decorProudMm,
+      clearanceMm: cfg.decorClearanceMm,
+      sizePct: cfg.decorSizePct,
+      offset: [0, 0],
+      background: cfg.decorBackground,
+      backgroundInlay: cfg.decorBackgroundInlay,
+    };
+  }, [
+    decorDesign,
+    decorPalette,
+    cfg.decorFaces,
+    cfg.decorInlay,
+    cfg.decorRecessMm,
+    cfg.decorProudMm,
+    cfg.decorClearanceMm,
+    cfg.decorSizePct,
+    cfg.decorBackground,
+    cfg.decorBackgroundInlay,
+  ]);
 
   useEffect(() => {
     setProcessing(true);
@@ -138,6 +237,7 @@ export default function DrawersPage() {
           frontColor: debCfg.frontColor,
           trayWallStyle: debCfg.trayWallStyle,
           hexMm: debCfg.hexMm,
+          decor,
         });
         setResult(r);
         setFitNonce((n) => n + 1);
@@ -155,7 +255,7 @@ export default function DrawersPage() {
       clearTimeout(t);
       clearTimeout(id);
     };
-  }, [debCfg]);
+  }, [debCfg, decor]);
 
   const parts = useMemo(
     () =>
@@ -201,7 +301,9 @@ export default function DrawersPage() {
     () =>
       `drawers-${Math.round(cfg.cabinetWidthMm)}x${Math.round(
         cfg.cabinetDepthMm
-      )}x${Math.round(cfg.cabinetHeightMm)}-${cfg.drawerCount}drawer`,
+      )}x${Math.round(cfg.cabinetHeightMm)}-${cfg.drawerCount}drawer${
+        decorName ? `-${decorName}` : ""
+      }`,
     [cfg.cabinetWidthMm, cfg.cabinetDepthMm, cfg.cabinetHeightMm, cfg.drawerCount]
   );
 
@@ -255,7 +357,38 @@ export default function DrawersPage() {
                 </h2>
                 {processing && <Spinner label="Updating…" />}
               </div>
-              <DrawersControls v={cfg} onChange={patch} />
+              <DrawersControls
+                v={cfg}
+                onChange={patch}
+                decor={{
+                  fileName: decorName,
+                  onFile: onDecorFile,
+                  onRemove: removeDecor,
+                  palette: decorPalette,
+                  counts: decorCounts,
+                  onPalette: (i, color) =>
+                    setDecorPalette((p) => {
+                      const next = [...p];
+                      next[i] = color;
+                      return next;
+                    }),
+                  onInlay: (i, on) =>
+                    setCfg((c) => {
+                      const next = [...c.decorInlay];
+                      next[i] = on;
+                      return { ...c, decorInlay: next };
+                    }),
+                  onAutoPalette: () => {
+                    if (!decorDetect) return;
+                    const { palette, counts } = detectDesignPalette(
+                      decorDetect,
+                      cfg.decorColorCount
+                    );
+                    setDecorPalette(palette);
+                    setDecorCounts(counts);
+                  },
+                }}
+              />
             </section>
           </aside>
 

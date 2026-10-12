@@ -27,6 +27,23 @@
 
 import earcut from "earcut";
 import { modelBounds } from "./bounds";
+import {
+  DECOR_FACE_LABELS,
+  faceAxes,
+  faceDecor,
+  layoutFace,
+  placePart,
+  planeDirection,
+  planePoint,
+  shiftSoup,
+  sliceRows,
+  soupSize2D,
+  type DecorFace,
+  type DecorInput,
+  type FaceGrid,
+  type FacePlane,
+  type RecessRect,
+} from "./decor";
 import type { RGB } from "./quantize";
 
 export interface DrawersInput {
@@ -76,6 +93,9 @@ export interface DrawersInput {
   trayWallStyle: "solid" | "hex";
   /** Hex hole size (across flats, mm) when `trayWallStyle` is "hex". */
   hexMm: number;
+  /** Optional image decoration: a recess cut into each chosen face plus one
+   *  printed part per inlaid colour, to glue in (see `lib/decor.ts`). */
+  decor?: DecorInput;
 }
 
 export interface DrawersPart {
@@ -121,6 +141,19 @@ export interface DrawersResult {
   preview: Uint8ClampedArray;
   /** Cabinet solid height (mm) at a cabinet-local point (x right, y up). */
   heightAt(xMm: number, yMm: number): number;
+  /** What the image decoration added, if any. */
+  decor?: {
+    /** Faces carrying a recess (the front is split across the drawers). */
+    faces: DecorFace[];
+    /** Number of printed inlay parts. */
+    partCount: number;
+    /** Recess depth actually used (mm), after clamping. */
+    recessMm: number;
+    /** Inlay part thickness (mm). */
+    thicknessMm: number;
+    /** Cell size of the finest face grid (mm). */
+    cellMm: number;
+  };
   warnings: string[];
 }
 
@@ -296,28 +329,137 @@ function pushBox(
 }
 
 /**
- * The cabinet: a rectangular box with a 45° chamfer `c` on its edges, minus a
- * rectangular pocket open at the front (the drawer cavity). Returns one closed,
- * manifold triangle soup. The pocket is [px0,px1] × [0,py1] × [pz0,pz1]; the
- * caller guarantees c < wall/floor/roof so the pocket stays clear of the
- * chamfers and the front face keeps a rim.
+ * Clip a closed triangle soup by the half-space `n · p ≤ d`, keeping that side
+ * and closing the cut with a cap so the result stays a closed solid. Only ever
+ * used to trim a drawer front's **convex** corner — the cube's front-to-back
+ * (long-edge) chamfers, which a section sweep cannot express and which sit well
+ * away from the panel's grooves — so the cut cross-section is a single simple
+ * loop. Cut edges are stitched into that loop and fanned; vertices are welded
+ * (0.001 mm) and degenerate triangles dropped, so the seam stays watertight even
+ * where the cut plane grazes a mesh vertex (as it does at the panel's corners).
+ */
+function clipHalfSpace(positions: number[], n: V3, d: number): number[] {
+  const out: number[] = [];
+  const sd = (p: number[]) => n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d;
+  // weld every point on a 0.001 mm grid so shared cut points coincide exactly
+  const kOf = (p: number[]) =>
+    `${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}`;
+  const pts = new Map<string, number[]>();
+  const put = (p: number[]): string => {
+    const k = kOf(p);
+    if (!pts.has(k)) pts.set(k, p);
+    return k;
+  };
+  const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+    (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a);
+  };
+  // drop degenerate (collinear / welded-together) triangles
+  const tri = (a: number[], b: number[], c: number[]): void => {
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const cx = uy * vz - uz * vy;
+    const cy = uz * vx - ux * vz;
+    const cz = ux * vy - uy * vx;
+    if (Math.abs(cx) + Math.abs(cy) + Math.abs(cz) < 1e-9) return;
+    out.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+  };
+  for (let i = 0; i + 8 < positions.length; i += 9) {
+    const p: number[][] = [
+      [positions[i], positions[i + 1], positions[i + 2]],
+      [positions[i + 3], positions[i + 4], positions[i + 5]],
+      [positions[i + 6], positions[i + 7], positions[i + 8]],
+    ];
+    const s = p.map(sd);
+    const poly: number[][] = [];
+    const on: string[] = [];
+    for (let k = 0; k < 3; k++) {
+      const a = p[k];
+      const b = p[(k + 1) % 3];
+      const sa = s[k];
+      const sb = s[(k + 1) % 3];
+      if (sa <= 1e-9) {
+        const ka = put(a);
+        poly.push(pts.get(ka)!);
+        if (Math.abs(sa) <= 1e-6) on.push(ka);
+      }
+      if ((sa < -1e-9 && sb > 1e-9) || (sa > 1e-9 && sb < -1e-9)) {
+        const t = sa / (sa - sb);
+        const ka = put([
+          a[0] + t * (b[0] - a[0]),
+          a[1] + t * (b[1] - a[1]),
+          a[2] + t * (b[2] - a[2]),
+        ]);
+        poly.push(pts.get(ka)!);
+        on.push(ka);
+      }
+    }
+    for (let k = 1; k + 1 < poly.length; k++) {
+      tri(poly[0], poly[k], poly[k + 1]);
+    }
+    if (on.length === 2 && on[0] !== on[1]) link(on[0], on[1]);
+  }
+  // cap: walk each cut loop and fan it (wound outward along +n)
+  const seen = new Set<string>();
+  for (const start of adj.keys()) {
+    if (seen.has(start)) continue;
+    const loop: string[] = [start];
+    seen.add(start);
+    let prev = "";
+    let cur = start;
+    for (;;) {
+      const next = [...(adj.get(cur) ?? [])].find(
+        (v) => v !== prev && !seen.has(v)
+      );
+      if (next === undefined) break;
+      seen.add(next);
+      loop.push(next);
+      prev = cur;
+      cur = next;
+    }
+    // Fan from the loop's centroid: every boundary edge is used exactly once and
+    // the spokes are shared, even where the cut loop runs straight (collinear).
+    const loopPts = loop.map((k) => pts.get(k)!);
+    const c = [0, 1, 2].map(
+      (a) => loopPts.reduce((s, p) => s + p[a], 0) / loopPts.length
+    );
+    for (let k = 0; k < loopPts.length; k++) {
+      pushFace(
+        out,
+        [loopPts[k] as V3, loopPts[(k + 1) % loopPts.length] as V3, c as V3],
+        n
+      );
+    }
+  }
+  return out;
+}
+
+
+/**
+ * The cabinet: a rectangular box with a straight 45° chamfer `c` on all twelve
+ * outer edges, minus a rectangular pocket open at the front (the drawer cavity).
+ * Returns one closed, manifold triangle soup. The pocket is
+ * [px0,px1] × [0,py1] × [pz0,pz1]; the caller guarantees c < wall/floor/roof so
+ * the pocket stays clear of the chamfers and the front ring keeps a rim.
  *
- * The bevel is held off the **front face**: over the body (y ∈ [c, D−c]) the four
- * long edges are cut by `x + z = c` (and its mirrors), but the cut fades linearly
- * to nothing over the front collar — `x + z = y` — so the front stays a plain
- * full-width square and the drawer fronts are the only chamfered things there.
- * Both cuts meet exactly at y = c, so there is no step: bottom/top/left/right are
- * still convex hexagons.
+ * The shell spans the cube from its front plane back, so its own front face is
+ * the cube's chamfered cross-section — a full square with the four corners cut
+ * by `c`. The flush drawer fronts carry the same cross-section and close it, so
+ * a shut chest is exactly a chamfered cube (the bevel is never ramped in).
+ *
+ * `pockets` sinks a decorative recess into any of the five visible faces (the
+ * shell's front face is hidden behind the drawer fronts, so the front is
+ * decorated on the panels instead — see `buildDrawerPanel`).
  */
 function buildChamferedCabinet(
   W: number, D: number, H: number, c: number,
-  px0: number, px1: number, py1: number, pz0: number, pz1: number
+  px0: number, px1: number, py1: number, pz0: number, pz1: number,
+  pockets: Partial<Record<DecorFace, { rect: RecessRect; depth: number }>> = {}
 ): number[] {
   const out: number[] = [];
   const C: V3 = [W / 2, D / 2, H / 2];
 
-  // The four long faces fan out over the collar at the front (the bevel fades to
-  // nothing by the front face). Each has a reflex corner, so earcut — not a fan.
   const dedupe = (pts: [number, number][]): [number, number][] => {
     const near = (a: [number, number], b: [number, number]) =>
       Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
@@ -325,19 +467,33 @@ function buildChamferedCabinet(
     if (kept.length > 1 && near(kept[kept.length - 1], kept[0])) kept.pop();
     return kept;
   };
-  // (x, y): the full square at the front face, inset by `c` behind the collar
-  const plan = dedupe([
-    [0, 0], [W, 0], [W - c, c], [W - c, D - c], [c, D - c], [c, c],
-  ]);
-  // (y, z): the same taper in z
-  const side = dedupe([
-    [0, 0], [c, c], [D - c, c], [D - c, H - c], [c, H - c], [0, H],
-  ]);
-  pushPolygonFlat(out, plan, 2, 0, [0, 0, -1]); // z=0
-  pushPolygonFlat(out, plan, 2, H, [0, 0, 1]); // z=H
-  pushPolygonFlat(out, side, 0, 0, [-1, 0, 0]); // x=0
-  pushPolygonFlat(out, side, 0, W, [1, 0, 0]); // x=W
-  pushOriented(out, [[c, D, c], [c, D, H - c], [W - c, D, H - c], [W - c, D, c]], C); // y=D
+  /** One flat face: a plain polygon, or a recess with a ring around the design. */
+  const face = (id: DecorFace, flat: () => void) => {
+    const p = pockets[id];
+    if (!p) {
+      flat();
+      return;
+    }
+    const { plane, w, h } = shellFaceFrame(id, W, D, H, c);
+    pushDecorPocket(
+      out,
+      [[0, 0], [w, 0], [w, h], [0, h]],
+      p.rect,
+      plane,
+      p.depth
+    );
+  };
+  // (x, y): the bottom/top face, inset by `c` on all four sides
+  const plan = dedupe([[c, 0], [W - c, 0], [W - c, D - c], [c, D - c]]);
+  // (y, z): the left/right face, inset by `c` on all four sides
+  const side = dedupe([[0, c], [D - c, c], [D - c, H - c], [0, H - c]]);
+  face("bottom", () => pushPolygonFlat(out, plan, 2, 0, [0, 0, -1])); // z=0
+  face("top", () => pushPolygonFlat(out, plan, 2, H, [0, 0, 1])); // z=H
+  face("left", () => pushPolygonFlat(out, side, 0, 0, [-1, 0, 0])); // x=0
+  face("right", () => pushPolygonFlat(out, side, 0, W, [1, 0, 0])); // x=W
+  face("back", () =>
+    pushOriented(out, [[c, D, c], [c, D, H - c], [W - c, D, H - c], [W - c, D, c]], C)
+  ); // y=D
 
   // back vertical-edge chamfers (span z from c to H−c)
   pushOriented(out, [[0, D - c, c], [0, D - c, H - c], [c, D, H - c], [c, D, c]], C); // x+(D−y)=c
@@ -347,20 +503,14 @@ function buildChamferedCabinet(
   pushOriented(out, [[c, D - c, 0], [W - c, D - c, 0], [W - c, D, c], [c, D, c]], C); // (D−y)+z=c (back-bottom)
   pushOriented(out, [[c, D, H - c], [W - c, D, H - c], [W - c, D - c, H], [c, D - c, H]], C); // (D−y)+(H−z)=c
 
-  // 4 Y-parallel (long-edge) chamfers (span y from c to D−c)
-  pushOriented(out, [[0, c, c], [0, D - c, c], [c, D - c, 0], [c, c, 0]], C);         // x+z=c (left-bottom)
-  pushOriented(out, [[0, c, H - c], [c, c, H], [c, D - c, H], [0, D - c, H - c]], C); // x+(H−z)=c (left-top)
-  pushOriented(out, [[W, c, c], [W - c, c, 0], [W - c, D - c, 0], [W, D - c, c]], C); // (W−x)+z=c (right-bottom)
-  pushOriented(out, [[W, c, H - c], [W, D - c, H - c], [W - c, D - c, H], [W - c, c, H]], C); // (W−x)+(H−z)=c
+  // 4 Y-parallel (long-edge) chamfers — straight, spanning the whole depth
+  pushOriented(out, [[0, 0, c], [0, D - c, c], [c, D - c, 0], [c, 0, 0]], C);         // x+z=c (left-bottom)
+  pushOriented(out, [[0, 0, H - c], [c, 0, H], [c, D - c, H], [0, D - c, H - c]], C); // x+(H−z)=c (left-top)
+  pushOriented(out, [[W, 0, c], [W - c, 0, 0], [W - c, D - c, 0], [W, D - c, c]], C); // (W−x)+z=c (right-bottom)
+  pushOriented(out, [[W, 0, H - c], [W, D - c, H - c], [W - c, D - c, H], [W - c, 0, H]], C); // (W−x)+(H−z)=c
 
-  // front collars: the bevel fades linearly to nothing at the front face, so the
-  // front face is a plain square and only the drawer fronts are chamfered there
-  pushFace(out, [[0, 0, 0], [0, c, c], [c, c, 0]], [-1, 1, -1]);     // x+z=y
-  pushFace(out, [[W, 0, 0], [W - c, c, 0], [W, c, c]], [1, 1, -1]);  // (W−x)+z=y
-  pushFace(out, [[0, 0, H], [c, c, H], [0, c, H - c]], [-1, 1, 1]);  // x+(H−z)=y
-  pushFace(out, [[W, 0, H], [W, c, H - c], [W - c, c, H]], [1, 1, 1]); // (W−x)+(H−z)=y
-
-  // 4 corner triangles (one per back vertex — the front corners are sharp)
+  // 4 corner triangles (one per back vertex — the front corners are the front
+  // face's cut corners, which need no extra face)
   for (const cx of [0, W]) {
     for (const cz of [0, H]) {
       const ix = cx === 0 ? 1 : -1;
@@ -373,10 +523,11 @@ function buildChamferedCabinet(
     }
   }
 
-  // front face (y=0): the full outer square with the pocket mouth as a hole
+  // front face (y=0): the cube's chamfered cross-section (its four corners cut
+  // by `c`) with the pocket mouth as a hole
   pushRing(
     out,
-    [[0, 0], [W, 0], [W, H], [0, H]],
+    [[c, 0], [W - c, 0], [W, c], [W, H - c], [W - c, H], [c, H], [0, H - c], [0, c]],
     [[px0, pz0], [px0, pz1], [px1, pz1], [px1, pz0]],
     0,
     [0, -1, 0]
@@ -450,6 +601,113 @@ function pushPolygonZ(
   holes: [number, number][][] = []
 ): void {
   pushPolygonFlat(out, pts2D, 2, z, dir, holes);
+}
+
+/**
+ * A shell face's design plane and its usable rectangle (w × h) in that plane:
+ * the flat region between the cube's chamfer bands. `D` is the shell's own
+ * depth: the bottom/top/left/right faces run from the front plane (y = 0) back
+ * to the rear chamfer, so their depth extends to `D − c`.
+ */
+export function shellFaceFrame(
+  face: DecorFace,
+  W: number,
+  D: number,
+  H: number,
+  c: number
+): { plane: FacePlane; w: number; h: number } {
+  const { U, V, n } = faceAxes(face);
+  const w = W - 2 * c;
+  const d = Math.max(1, D - c);
+  const hgt = H - 2 * c;
+  switch (face) {
+    case "front":
+      return { plane: { O: [c, 0, c], U, V, n }, w, h: hgt };
+    case "back":
+      return { plane: { O: [W - c, D, c], U, V, n }, w, h: hgt };
+    case "left":
+      return { plane: { O: [0, D - c, c], U, V, n }, w: d, h: hgt };
+    case "right":
+      return { plane: { O: [W, 0, c], U, V, n }, w: d, h: hgt };
+    case "top":
+      return { plane: { O: [c, 0, H], U, V, n }, w, h: d };
+    case "bottom":
+      return { plane: { O: [c, D - c, 0], U, V, n }, w, h: d };
+  }
+}
+
+/**
+ * Triangulate a polygon (with holes) lying on a face's design plane, `w` along
+ * the face's outward normal, wound so the normal points along `dir`. Points are
+ * the plane's (u, v). earcut keeps the hole rings on their own vertices, so the
+ * caps weld to the pocket walls exactly.
+ */
+function pushPlaneFace(
+  out: number[],
+  outer: [number, number][],
+  holes: [number, number][][],
+  plane: FacePlane,
+  w: number,
+  dir: V3
+): void {
+  const flat: number[] = [];
+  for (const [u, v] of outer) flat.push(u, v);
+  const idx: number[] = [];
+  for (const h of holes) {
+    idx.push(flat.length / 2);
+    for (const [u, v] of h) flat.push(u, v);
+  }
+  const tris = earcut(flat, idx.length ? idx : undefined, 2);
+  for (let i = 0; i < tris.length; i += 3) {
+    const t: V3[] = [];
+    for (let k = 0; k < 3; k++) {
+      const j = tris[i + k] * 2;
+      t.push(planePoint(plane, flat[j], flat[j + 1], w));
+    }
+    pushFace(out, t, dir);
+  }
+}
+
+/**
+ * Sink a rectangular recess into a flat face: the face outline keeps the recess
+ * as a hole, and the recess gets four walls and a floor. `rect` is in the face
+ * plane's (u, v) mm frame and `outer` is the face outline in the same frame.
+ *
+ * A rectangular hole is deliberate: earcut drops *collinear* vertices from hole
+ * rings, so a recess following a pixel outline could never weld to walls emitted
+ * per outline segment. The decoration's silhouette comes from the background
+ * plate that sits in this recess (see `lib/decor.ts`).
+ */
+function pushDecorPocket(
+  out: number[],
+  outer: [number, number][],
+  rect: RecessRect,
+  plane: FacePlane,
+  depth: number
+): void {
+  const r: [number, number][] = [
+    [rect.u0, rect.v0],
+    [rect.u1, rect.v0],
+    [rect.u1, rect.v1],
+    [rect.u0, rect.v1],
+  ];
+  pushPlaneFace(out, outer, [r], plane, 0, plane.n);
+  const wall = (p: [number, number], q: [number, number], du: number, dv: number) =>
+    pushFace(
+      out,
+      [
+        planePoint(plane, p[0], p[1], 0),
+        planePoint(plane, q[0], q[1], 0),
+        planePoint(plane, q[0], q[1], -depth),
+        planePoint(plane, p[0], p[1], -depth),
+      ],
+      planeDirection(plane, du, dv)
+    );
+  wall(r[0], r[1], 0, 1); // bottom edge, void above it
+  wall(r[1], r[2], -1, 0); // right edge, void to its left
+  wall(r[2], r[3], 0, -1); // top edge, void below it
+  wall(r[3], r[0], 1, 0); // left edge, void to its right
+  pushPlaneFace(out, r, [], plane, -depth, plane.n);
 }
 
 /** A flat-top regular hexagon (across-flats `a`) centred at (cx, cy). */
@@ -584,8 +842,10 @@ function pushHoleyWall(
  * (y = depth) carries the dovetail GROOVES the tray's tenons slide into.
  *
  * The side chamfers come straight out of the section; the top/bottom ones clip
- * the extruded ends, and stop short of the grooves so the cut face stays a plain
- * trapezoid.
+ * the extruded ends (and stop short of the grooves). The outermost panels' outer
+ * ends also get the cube's **front-to-back** (long-edge) chamfers — the `x/z`
+ * corner cuts, which a section sweep cannot express — so the fronts alone
+ * complete the cube's chamfer.
  */
 function buildDrawerPanel(
   W: number,
@@ -594,7 +854,11 @@ function buildDrawerPanel(
   c: number,
   grooves: Dovetail[],
   bevelTop: boolean,
-  bevelBottom: boolean
+  bevelBottom: boolean,
+  /** Decorative recess in the front face: the plane's (u, v) are (x, z) with its
+   *  origin at the panel's own (c, 0, z0) — i.e. the front face is at y = 0 and
+   *  the design's v = 0 sits at `plane.O[2]`. */
+  pocket: { rect: RecessRect; plane: FacePlane; depth: number } | null = null
 ): number[] {
   const out: number[] = [];
   const sorted = [...grooves].sort((a, b) => a.cx - b.cx);
@@ -647,11 +911,26 @@ function buildDrawerPanel(
     area2 += a[0] * b[1] - b[0] * a[1];
   }
   const ccw = area2 > 0; // +1 = counter-clockwise section (in the x/y plane)
+  // The panel's front face (x ∈ [c, W−c], z ∈ [botCut, height − topCut]) is the
+  // section edge that lies at y = 0. With a decoration it becomes a ring around
+  // the design's recess instead of one quad.
+  const frontRect: [number, number][] | null = pocket
+    ? [
+        [0, botCut - pocket.plane.O[2]],
+        [W - 2 * c, botCut - pocket.plane.O[2]],
+        [W - 2 * c, height - topCut - pocket.plane.O[2]],
+        [0, height - topCut - pocket.plane.O[2]],
+      ]
+    : null;
   for (let i = 0; i < sec.length; i++) {
     const a = sec[i];
     const b = sec[(i + 1) % sec.length];
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
+    if (frontRect && a[1] === 0 && b[1] === 0 && Math.abs(dx) > 1e-9) {
+      pushDecorPocket(out, frontRect, pocket!.rect, pocket!.plane, pocket!.depth);
+      continue;
+    }
     // for a CCW section the outward normal of edge a→b is (dy, −dx)
     pushFace(
       out,
@@ -690,7 +969,22 @@ function buildDrawerPanel(
       [0, -1, -1]
     );
   }
-  return out;
+
+  // the cube's front-to-back (long-edge) chamfers, only where the outer end sits
+  // at the cube's own bottom/top: the `x ± z = c` corner cuts (a section sweep
+  // cannot express them), so the flush front matches the shell's cross-section
+  let res = out;
+  if (c > 1e-6 && (topCut > 0 || botCut > 0)) {
+    if (botCut > 0) {
+      res = clipHalfSpace(res, [-1, 0, -1], -c); // x + z ≥ c
+      res = clipHalfSpace(res, [1, 0, -1], W - c); // (W − x) + z ≥ c
+    }
+    if (topCut > 0) {
+      res = clipHalfSpace(res, [-1, 0, 1], height - c); // x + (height − z) ≥ c
+      res = clipHalfSpace(res, [1, 0, 1], W + height - c); // (W − x) + (height − z) ≥ c
+    }
+  }
+  return res;
 }
 
 /**
@@ -967,6 +1261,105 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     return out;
   };
 
+  // ---- decoration (optional): a recess per chosen face + one part per colour
+  // The recess may not break through the face's inner surface, so it is limited
+  // by the thinnest thing behind it (and kept clear of the shelf rails, which
+  // reach 0.6 mm into the walls).
+  const decor = input.decor;
+  const decorParts: DrawersPart[] = []; // printed flat, beside the cabinet
+  const decorGlued: DrawersPart[] = []; // dropped into their recesses
+  const decorWarnings: string[] = [];
+  const decorFaces: DecorFace[] = [];
+  const shellPockets: Partial<
+    Record<DecorFace, { rect: RecessRect; depth: number }>
+  > = {};
+  const shellLimit = Math.max(0.4, Math.min(wall, floorThk, roofThk) - 0.9);
+  const wantRecess = Math.max(0, decor?.recessMm ?? 0);
+  const wantProud = Math.max(0, decor?.proudMm ?? 0);
+  let decorSlotY = 0; // print-layout cursor for the inlay parts (4th column)
+  const decorSlotX = 3 * W + 3 * LAYOUT_GAP;
+  let decorThin = false;
+  let decorCellMm = 0;
+  let decorRecessUsed = 0;
+  let decorThicknessUsed = 0;
+
+  /**
+   * Build one face's decoration: the recess rectangle plus its printable
+   * pieces (one per inlaid colour, then the background plate). The pieces are
+   * added to the print layout column and to the glued preview; the recess is
+   * handed back for the face to cut.
+   */
+  const decorateFace = (
+    face: DecorFace,
+    plane: FacePlane,
+    fg: FaceGrid,
+    recess: number,
+    proud: number,
+    /** The plate's colour, or "face" for the face's own colour. */
+    faceColor: RGB,
+    name: (index: number) => string,
+    gluedOffset: V3
+  ): { rect: RecessRect; depth: number } | null => {
+    if (!decor) return null;
+    const clr = Math.max(0, decor.clearanceMm);
+    const thickness = Math.max(0.2, recess + proud - 0.05);
+    const fd = faceDecor(fg, decor.palette, decor.inlay, {
+      recessMm: recess,
+      proudMm: proud,
+      clearanceMm: clr,
+      background: decor.backgroundInlay
+        ? decor.background === "face"
+          ? faceColor
+          : decor.background
+        : null,
+      name,
+    });
+    if (!fd) return null;
+    if (fd.thin) decorThin = true;
+    decorCellMm = decorCellMm === 0 ? fg.pixelMm : Math.min(decorCellMm, fg.pixelMm);
+    if (decorRecessUsed === 0) decorRecessUsed = recess;
+    decorThicknessUsed = fd.thicknessMm;
+    if (!decorFaces.includes(face)) decorFaces.push(face);
+    for (const piece of fd.pieces) {
+      decorParts.push({
+        name: piece.name,
+        color: piece.color,
+        positions: shiftSoup(piece.soup, decorSlotX, decorSlotY),
+      });
+      decorSlotY += soupSize2D(piece.soup).h + LAYOUT_GAP;
+      decorGlued.push({
+        name: piece.name,
+        color: piece.color,
+        positions: shiftSoup(
+          placePart(piece.soup, plane, fd.thicknessMm, proud),
+          gluedOffset[0],
+          gluedOffset[1],
+          gluedOffset[2]
+        ),
+      });
+    }
+    return recess > 1e-6 ? { rect: fd.rect, depth: recess } : null;
+  };
+
+  // the shell's own faces (the front is the drawer fronts' front faces)
+  for (const face of decor?.faces ?? []) {
+    if (face === "front") continue;
+    const { plane, w, h } = shellFaceFrame(face, W, shellD, H, c);
+    const fg = layoutFace(decor!.design, w, h, decor!.sizePct, decor!.offset);
+    const recess = Math.min(wantRecess, shellLimit);
+    const pocket = decorateFace(
+      face,
+      plane,
+      fg,
+      recess,
+      wantProud,
+      input.color,
+      (i) => `${DECOR_FACE_LABELS[face]} ${i < 0 ? "base" : `decor ${i + 1}`}`,
+      [0, frontThk, 0]
+    );
+    if (pocket) shellPockets[face] = pocket;
+  }
+
   // ---- cabinet: one explicit chamfered solid with a front pocket. The soup is
   // kept in the model's own space (x = width, y = depth, z = height) so the
   // assembled preview can drop the drawers into it; the printed part rotates it.
@@ -979,7 +1372,8 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     px1,
     shellPy,
     pz0,
-    pz1
+    pz1,
+    shellPockets
   );
 
   const parts: DrawersPart[] = [
@@ -1065,6 +1459,18 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   ];
 
   const hexOn = input.trayWallStyle === "hex";
+
+  // The front's decoration: the design covers the cube's whole front elevation
+  // (inset by the chamfer and the panels' end cuts) and is then split per panel,
+  // so no part can straddle two drawers or reach past a panel's own edge. A
+  // front inlay is always flush — a raised one would catch on a shelf.
+  const frontCut = Math.min(c, Math.max(0, frontThk - dvDepth - 0.2));
+  const frontRecess = Math.min(wantRecess, Math.max(0.4, frontThk - dvDepth - 0.6));
+  const frontGrid =
+    decor && decor.faces.includes("front")
+      ? layoutFace(decor.design, W - 2 * c, H - 2 * frontCut, decor.sizePct, decor.offset)
+      : null;
+
   const trayLocal = buildTray(
     trayW,
     trayD,
@@ -1092,6 +1498,42 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
   ];
   for (let k = 0; k < N; k++) {
     const [fz0, fz1] = frontZ(k);
+    // this panel's band of the front elevation: the design is cut at the drawer
+    // seams (one clear cell in from the panel's own face edges), so each panel
+    // carries its own recess and its own parts
+    let pocket: { rect: RecessRect; plane: FacePlane; depth: number } | null = null;
+    if (frontGrid && decor) {
+      const px = frontGrid.pixelMm;
+      const zTopElev = H - frontCut;
+      const zLo = fz0 + (k === 0 ? frontCut : 0) + px;
+      const zHi = fz1 - (k === N - 1 ? frontCut : 0) - px;
+      const r0 = Math.ceil((zTopElev - zHi) / px);
+      const r1 = Math.floor((zTopElev - zLo) / px);
+      if (r1 - r0 >= 1) {
+        const slice = sliceRows(frontGrid, r0, r1);
+        // the slice's v = 0 sits at this z in the panel's own frame
+        const plane: FacePlane = {
+          O: [c, 0, zTopElev - r1 * px - fz0],
+          U: [1, 0, 0],
+          V: [0, 0, 1],
+          n: [0, -1, 0],
+        };
+        const cut = decorateFace(
+          "front",
+          plane,
+          slice,
+          frontRecess,
+          0,
+          input.frontColor,
+          (i) =>
+            N > 1
+              ? `Front ${k + 1} ${i < 0 ? "base" : `decor ${i + 1}`}`
+              : `Front ${i < 0 ? "base" : `decor ${i + 1}`}`,
+          [0, 0, fz0]
+        );
+        if (cut) pocket = { rect: cut.rect, plane, depth: cut.depth };
+      }
+    }
     // the outermost fronts carry the cube's top/bottom chamfer; the middle ones
     // butt against a shelf, so their ends stay square
     const panelLocal = buildDrawerPanel(
@@ -1101,7 +1543,8 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
       c,
       grooves,
       k === N - 1,
-      k === 0
+      k === 0,
+      pocket
     );
     const dy = k * (drawerDmm + LAYOUT_GAP);
     // fronts in one column beside the cabinet, their trays in the next column
@@ -1151,7 +1594,8 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
       positions: aTray,
     });
   }
-  parts.push(...frontParts, ...trayParts);
+  parts.push(...frontParts, ...trayParts, ...decorParts);
+  assembledParts.push(...decorGlued);
   // `openMm` is how far the assembled preview slides a drawer forward when it
   // animates them open: most of the tray comes out (so you can see inside), but
   // the back of the tray stays in the cavity so it still reads as one object.
@@ -1231,6 +1675,57 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     );
   }
 
+  // ---- decoration warnings ----
+  if (decor && decorFaces.length > 0) {
+    const clampedShell = decor.faces.some(
+      (f) => f !== "front" && wantRecess > shellLimit + 1e-6
+    );
+    const clampedFront =
+      decor.faces.includes("front") && wantRecess > frontRecess + 1e-6;
+    if (clampedShell || clampedFront) {
+      const used = Math.min(
+        clampedShell ? shellLimit : Infinity,
+        clampedFront ? frontRecess : Infinity
+      );
+      warnings.push(
+        `A ${wantRecess.toFixed(1)} mm recess is deeper than the material ` +
+          `behind the decorated faces allows — clamped to ${used.toFixed(1)} mm ` +
+          `(thicken the walls, or lower the recess).`
+      );
+    }
+    if (wantProud > 1e-6 && decor.faces.includes("front")) {
+      warnings.push(
+        `Drawer-front inlays stay flush (the design's proud ${wantProud.toFixed(
+          1
+        )} mm is ignored there) so an open drawer cannot catch on a shelf.`
+      );
+    }
+    if (decorThin) {
+      warnings.push(
+        `Part of the design is thinner than one cell (~${decorCellMm.toFixed(
+          2
+        )} mm) — those lines will be missing; raise the decoration resolution ` +
+          `or simplify the image.`
+      );
+    }
+    if (decorCellMm > 0.8) {
+      warnings.push(
+        `Decoration cells are ${decorCellMm.toFixed(
+          2
+        )} mm across — coarse detail reads as steps; raise the decoration ` +
+          `resolution or shrink the design.`
+      );
+    } else if (decorCellMm < 0.12) {
+      warnings.push(
+        `Decoration cells are only ${decorCellMm.toFixed(
+          2
+        )} mm across — finer than a nozzle can draw; lower the decoration ` +
+          `resolution.`
+      );
+    }
+    warnings.push(...decorWarnings);
+  }
+
   return {
     parts,
     assembled,
@@ -1248,6 +1743,16 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
     centerMm,
     preview,
     heightAt,
+    decor:
+      decorFaces.length > 0
+        ? {
+            faces: decorFaces,
+            partCount: decorParts.length,
+            recessMm: decorRecessUsed,
+            thicknessMm: decorThicknessUsed,
+            cellMm: decorCellMm,
+          }
+        : undefined,
     warnings,
   };
 }

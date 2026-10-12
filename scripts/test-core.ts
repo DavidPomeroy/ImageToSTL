@@ -58,7 +58,15 @@ import { clearCircle, fitHole, runCentre } from "../lib/masks";
 import { buildCoasterFromGrid, RELIEF_LEVELS } from "../lib/coaster";
 import { buildFrame, FRAME_SHAPES } from "../lib/frame";
 import { buildBox, BOX_SHAPES } from "../lib/box";
-import { buildDrawers } from "../lib/drawers";
+import { buildDrawers, shellFaceFrame } from "../lib/drawers";
+import {
+  colourMasks,
+  DECOR_FACE_LABELS,
+  layoutFace,
+  planePoint,
+  unionMask,
+  type DecorFace,
+} from "../lib/decor";
 import { buildPinX, buildKnuckleX, buildWebX } from "../lib/hinge";
 import {
   buildBuildingParts,
@@ -175,6 +183,42 @@ function countNonManifoldEdges(positions: number[]): number {
   let bad = 0;
   for (const c of edges.values()) if (c !== 2) bad++;
   return bad;
+}
+
+/** Distance from `o` along `d` to the first triangle of `positions`, or Infinity.
+ *  Used to probe a built part's surface (e.g. the closed chest's corner chamfer). */
+function rayHit(positions: number[], o: number[], d: number[]): number {
+  let best = Infinity;
+  for (let i = 0; i + 8 < positions.length; i += 9) {
+    const ax = positions[i],
+      ay = positions[i + 1],
+      az = positions[i + 2];
+    const e1x = positions[i + 3] - ax,
+      e1y = positions[i + 4] - ay,
+      e1z = positions[i + 5] - az;
+    const e2x = positions[i + 6] - ax,
+      e2y = positions[i + 7] - ay,
+      e2z = positions[i + 8] - az;
+    const px = d[1] * e2z - d[2] * e2y;
+    const py = d[2] * e2x - d[0] * e2z;
+    const pz = d[0] * e2y - d[1] * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det;
+    const sx = o[0] - ax,
+      sy = o[1] - ay,
+      sz = o[2] - az;
+    const u = (sx * px + sy * py + sz * pz) * inv;
+    if (u < 0 || u > 1) continue;
+    const qx = sy * e1z - sz * e1y,
+      qy = sz * e1x - sx * e1z,
+      qz = sx * e1y - sy * e1x;
+    const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+    if (v < 0 || u + v > 1) continue;
+    const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    if (t > 1e-6 && t < best) best = t;
+  }
+  return best;
 }
 
 // --- Synthetic 8x8 RGBA image: 4 quadrant colors + transparent corner
@@ -3005,9 +3049,9 @@ const drawerBase = {
       square.parts[0].positions
     ).toFixed(1)} → ${bedMinX(bevelled.parts[0].positions).toFixed(1)} mm)`
   );
-  // the cabinet's own front face (held `frontMm` back, behind the drawer fronts)
-  // is a plain square — the bevel ramps in behind it — so the cube's front
-  // chamfers come from the drawer fronts
+  // the shell spans the cube from its front plane back, so its own front face is
+  // the cube's chamfered cross-section (full width/height, corners cut by `c`) —
+  // the flush drawer fronts carry the same cross-section and close it
   {
     const pos = d.parts[0].positions;
     const shellFront = drawerBase.cabinetDepthMm - drawerBase.frontMm;
@@ -3025,11 +3069,37 @@ const drawerBase = {
         Math.abs(fx1 - drawerBase.cabinetWidthMm) < 1e-6 &&
         Math.abs(fy0) < 1e-6 &&
         Math.abs(fy1 - drawerBase.cabinetHeightMm) < 1e-6,
-      `the cabinet's front face is a plain square (${fx0.toFixed(0)}..${fx1.toFixed(
+      `the cabinet's front face reaches the full cube width/height (${fx0.toFixed(
         0
-      )} x ${fy0.toFixed(0)}..${fy1.toFixed(0)})`
+      )}..${fx1.toFixed(0)} x ${fy0.toFixed(0)}..${fy1.toFixed(0)})`
     );
   }
+  // ...and its chamfered cross-section is continuous with the fronts, so the
+  // closed chest is a clean 45° chamfered cube: the four front-to-back corner
+  // edges are cut by `c` across the whole depth, not ramped in behind the front
+  // slab (the cabinet no longer fades its bevel to nothing at the front face)
+  {
+    const parts = d.assembled.parts.map((p) => p.positions);
+    const leftAt = (y: number, z: number): number => {
+      let m = Infinity;
+      for (const pos of parts) {
+        const t = rayHit(pos, [-50, y, z], [1, 0, 0]);
+        if (t < Infinity) m = Math.min(m, -50 + t);
+      }
+      return m;
+    };
+    let worst = 0;
+    for (let y = d.chamferMm; y <= 2 * drawerBase.frontMm; y += 0.5) {
+      worst = Math.max(worst, Math.abs(leftAt(y, 0.5) - (d.chamferMm - 0.5)));
+    }
+    check(
+      worst < 1e-6,
+      `a closed chest is a clean 45° chamfered cube (corner off by ${worst.toFixed(
+        3
+      )} mm)`
+    );
+  }
+
   // ...and the cube's front chamfers come from the drawer fronts: the outermost
   // panels are cut back at their outer ends, the middle ones stay square
   {
@@ -3445,6 +3515,339 @@ async function main() {
     `drawer 3MF has ${drawCab.parts.length} objects (cabinet + fronts + trays)`
   );
 
+
+// ---- drawer decoration: an image inlaid into the faces ----
+{
+  const DW = 48;
+  const DH = 48;
+  const design = new Uint8Array(DW * DH).fill(EMPTY);
+  const DEC_BLACK = 0;
+  const DEC_RED = 1;
+  const DEC_BLACK_PAL: RGB = [20, 20, 20];
+  const DEC_RED_PAL: RGB = [200, 40, 40];
+  for (let y = 10; y < 38; y++) {
+    for (let x = 10; x < 38; x++) {
+      if (x < 14 || x > 33 || y < 14 || y > 33) design[y * DW + x] = DEC_BLACK;
+    }
+  }
+  for (let y = 26; y < 34; y++) for (let x = 26; x < 34; x++) design[y * DW + x] = DEC_RED;
+  for (let y = 26; y < 34; y++) design[y * DW + 44] = DEC_BLACK; // a 1-cell line
+  design[4 * DW + 4] = DEC_BLACK; // a speck — dropped as unprintable
+
+  const decorBase = {
+    design: { grid: design, gw: DW, gh: DH },
+    palette: [DEC_BLACK_PAL, DEC_RED_PAL] as RGB[],
+    inlay: [true, true],
+    faces: ["front", "back", "left", "right", "top", "bottom"] as DecorFace[],
+    recessMm: 1.2,
+    proudMm: 0.4,
+    clearanceMm: 0.15,
+    sizePct: 0.8,
+    offset: [0, 0] as [number, number],
+    background: "face" as const,
+    backgroundInlay: true,
+  };
+  const decorDrawers = buildDrawers({ ...drawerBase, decor: decorBase });
+  let decorBad = 0;
+  let decorFlip = 0;
+  for (const p of [...decorDrawers.parts, ...decorDrawers.assembled.parts]) {
+    const e = analyzeEdges(p.positions);
+    decorBad += e.holes + e.bad;
+    decorFlip += countFlippedFaces(p.positions);
+  }
+  check(
+    decorBad === 0 && decorFlip === 0,
+    `every decorated part is watertight and wound outward (${decorBad} defects, ${decorFlip} flipped)`
+  );
+  const decorNames = decorDrawers.parts.map((p) => p.name);
+  check(
+    decorNames.includes("Back decor 1") &&
+      decorNames.includes("Back base") &&
+      decorNames.some((n) => /^Front \d decor 1$/.test(n)),
+    "the decoration prints one part per colour plus the background plate"
+  );
+  check(
+    decorDrawers.decor?.faces.length === 6 && (decorDrawers.decor?.partCount ?? 0) > 6,
+    `all six faces carry a recess (${decorDrawers.decor?.faces.length} faces, ${decorDrawers.decor?.partCount} parts)`
+  );
+  // every piece on a cabinet face stays inside that face's own flat rectangle
+  // (it would catch a frame that is the wrong size, e.g. not reaching the rear
+  // chamfer on the side faces)
+  {
+    const inside = (name: string, face: DecorFace): string | null => {
+      const fr = shellFaceFrame(
+        face,
+        drawerBase.cabinetWidthMm,
+        Math.max(drawerBase.wallMm + 1, drawerBase.cabinetDepthMm - drawerBase.frontMm),
+        drawerBase.cabinetHeightMm,
+        decorDrawers.chamferMm
+      );
+      for (const p of decorDrawers.assembled.parts.filter((q) => q.name.startsWith(name))) {
+        for (let i = 0; i + 2 < p.positions.length; i += 3) {
+          const dx = p.positions[i] - fr.plane.O[0];
+          const dy = p.positions[i + 1] - fr.plane.O[1];
+          const dz = p.positions[i + 2] - fr.plane.O[2];
+          const u = dx * fr.plane.U[0] + dy * fr.plane.U[1] + dz * fr.plane.U[2];
+          const v = dx * fr.plane.V[0] + dy * fr.plane.V[1] + dz * fr.plane.V[2];
+          if (u < -1e-6 || u > fr.w + 1e-6 || v < -1e-6 || v > fr.h + 1e-6) {
+            return `${name} u=${u.toFixed(1)} v=${v.toFixed(1)} of ${fr.w.toFixed(
+              1
+            )}×${fr.h.toFixed(1)}`;
+          }
+        }
+      }
+      return null;
+    };
+    const escaped =
+      inside("Back ", "back") ??
+      inside("Left ", "left") ??
+      inside("Right ", "right") ??
+      inside("Top ", "top") ??
+      inside("Bottom ", "bottom");
+    check(escaped === null, `cabinet-face inlays stay inside their own face (${escaped ?? "ok"})`);
+  }
+
+  // the recess is really there: probe the assembled cabinet's back face
+  const deckShellD = Math.max(
+    drawerBase.wallMm + 1,
+    drawerBase.cabinetDepthMm - drawerBase.frontMm
+  );
+  const deckCab = decorDrawers.assembled.parts.find((p) => p.name === "Cabinet")!;
+  const deckFace = shellFaceFrame(
+    "back",
+    drawerBase.cabinetWidthMm,
+    deckShellD,
+    drawerBase.cabinetHeightMm,
+    decorDrawers.chamferMm
+  );
+  const deckFg = layoutFace(decorBase.design, deckFace.w, deckFace.h, 0.8, [0, 0]);
+  const deckUnion = unionMask(colourMasks(deckFg, decorBase.palette, decorBase.inlay));
+  let deckCell: [number, number] | null = null;
+  for (let y = 1; y + 1 < deckFg.gh && !deckCell; y++) {
+    for (let x = 1; x + 1 < deckFg.gw; x++) {
+      const i = y * deckFg.gw + x;
+      if (deckUnion[i] && deckUnion[i - 1] && deckUnion[i + 1]) {
+        deckCell = [x, y];
+        break;
+      }
+    }
+  }
+  const [dcellX, dcellY] = deckCell!;
+  const deckAt = (cx: number, cy: number) =>
+    planePoint(
+      deckFace.plane,
+      (cx + 0.5) * deckFg.pixelMm,
+      (deckFg.gh - cy - 0.5) * deckFg.pixelMm,
+      0
+    );
+  const deckOn = deckAt(dcellX, dcellY);
+  const deckHit = rayHit(
+    deckCab.positions,
+    [deckOn[0], drawerBase.cabinetDepthMm + 10, deckOn[2]],
+    [0, -1, 0]
+  );
+  check(
+    Math.abs(drawerBase.cabinetDepthMm + 10 - deckHit - (drawerBase.cabinetDepthMm - 1.2)) < 1e-6,
+    "the recess floor sits 1.2 mm inside the back face"
+  );
+  const deckOff = planePoint(deckFace.plane, 1, 1, 0);
+  const deckOffHit = rayHit(
+    deckCab.positions,
+    [deckOff[0], drawerBase.cabinetDepthMm + 10, deckOff[2]],
+    [0, -1, 0]
+  );
+  check(Math.abs(deckOffHit - 10) < 1e-6, "the rest of the back face stays flush with the cube");
+
+  // the front's decoration is split per drawer: every piece lies inside its own
+  // panel's front face, and never proud of it
+  let frontEscape = 0;
+  let frontProud = 0;
+  for (let n = 1; n <= 6; n++) {
+    const d = buildDrawers({
+      ...drawerBase,
+      drawerCount: n,
+      decor: { ...decorBase, faces: ["front"] },
+    });
+    const panels = d.assembled.parts.filter((p) => /^Front( \d+)?$/.test(p.name));
+    for (const piece of d.assembled.parts.filter((p) => /decor/.test(p.name))) {
+      const k = Number(/^Front (\d+)/.exec(piece.name)?.[1] ?? "1");
+      const panel = panels[k - 1];
+      let px0 = Infinity, px1 = -Infinity, pz0 = Infinity, pz1 = -Infinity;
+      for (let i = 0; i + 2 < panel.positions.length; i += 3) {
+        px0 = Math.min(px0, panel.positions[i]);
+        px1 = Math.max(px1, panel.positions[i]);
+        pz0 = Math.min(pz0, panel.positions[i + 2]);
+        pz1 = Math.max(pz1, panel.positions[i + 2]);
+      }
+      for (let i = 0; i + 2 < piece.positions.length; i += 3) {
+        const x = piece.positions[i];
+        const y = piece.positions[i + 1];
+        const z = piece.positions[i + 2];
+        if (x < px0 - 1e-6 || x > px1 + 1e-6 || z < pz0 - 1e-6 || z > pz1 + 1e-6) {
+          frontEscape++;
+        }
+        if (y < -1e-6 || y > 1.2) frontProud++;
+      }
+    }
+  }
+  check(
+    frontEscape === 0,
+    `front inlays never reach past their own drawer panel (1–6 drawers, ${frontEscape})`
+  );
+  check(
+    frontProud === 0,
+    `front inlays stay inside the front slab, so nothing catches (${frontProud})`
+  );
+
+  // chamfers 0–3 mm keep every decorated part clean
+  let decorSweep = 0;
+  for (const ch of [0, 1.5, 3]) {
+    const d = buildDrawers({ ...drawerBase, chamferMm: ch, decor: decorBase });
+    for (const p of [...d.parts, ...d.assembled.parts]) {
+      const e = analyzeEdges(p.positions);
+      decorSweep += e.holes + e.bad;
+    }
+  }
+  check(decorSweep === 0, `decorated chests stay watertight for chamfers 0–3 mm (${decorSweep})`);
+
+  // an empty / transparent design adds nothing at all
+  const blank = buildDrawers({
+    ...drawerBase,
+    decor: {
+      ...decorBase,
+      design: { grid: new Uint8Array(DW * DH).fill(EMPTY), gw: DW, gh: DH },
+    },
+  });
+  check(
+    blank.parts.length === buildDrawers(drawerBase).parts.length &&
+      blank.decor === undefined,
+    "a blank design leaves the chest untouched"
+  );
+
+  // orientation: the design must read exactly as the image does — the image's
+  // top is the top of the face as seen from outside, its left the left — so an
+  // upside-down or mirrored inlay fails here
+  {
+    const ON = 32;
+    const onGrid = new Uint8Array(ON * ON).fill(EMPTY);
+    for (let y = 0; y < 12; y++) {
+      for (let x = 0; x < 12; x++) onGrid[y * ON + x] = 0; // the image's top-left
+    }
+    const od = buildDrawers({
+      ...drawerBase,
+      decor: {
+        ...decorBase,
+        faces: ["back"],
+        design: { grid: onGrid, gw: ON, gh: ON },
+        palette: [DEC_BLACK_PAL],
+        inlay: [true],
+      },
+    });
+    const onShellD = Math.max(
+      drawerBase.wallMm + 1,
+      drawerBase.cabinetDepthMm - drawerBase.frontMm
+    );
+    const onFrame = shellFaceFrame(
+      "back",
+      drawerBase.cabinetWidthMm,
+      onShellD,
+      drawerBase.cabinetHeightMm,
+      od.chamferMm
+    );
+    // project the ink's part onto the face plane: u runs right, v up, seen from
+    // outside the face
+    const ink = od.assembled.parts.find((p) => p.name === "Back decor 1")!;
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (let i = 0; i + 2 < ink.positions.length; i += 3) {
+      const dx = ink.positions[i] - onFrame.plane.O[0];
+      const dy = ink.positions[i + 1] - onFrame.plane.O[1];
+      const dz = ink.positions[i + 2] - onFrame.plane.O[2];
+      const u = dx * onFrame.plane.U[0] + dy * onFrame.plane.U[1] + dz * onFrame.plane.U[2];
+      const v = dx * onFrame.plane.V[0] + dy * onFrame.plane.V[1] + dz * onFrame.plane.V[2];
+      u0 = Math.min(u0, u);
+      u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v);
+      v1 = Math.max(v1, v);
+    }
+    check(
+      u1 < onFrame.w * 0.55 && u0 > onFrame.w * 0.05,
+      `the image's top-left ink lands on the face's left (u ${u0.toFixed(0)}–${u1.toFixed(0)} of ${onFrame.w.toFixed(0)})`
+    );
+    check(
+      v0 > onFrame.h * 0.45 && v1 < onFrame.h * 0.95,
+      `the image's top-left ink lands on the face's top, not upside down (v ${v0.toFixed(0)}–${v1.toFixed(0)} of ${onFrame.h.toFixed(0)})`
+    );
+
+    // the same reading on every face: the image's top-left corner lands on the
+    // upper-left of each face as seen from outside it
+    const faceEscape: string[] = [];
+    for (const face of ["front", "back", "left", "right", "top", "bottom"] as DecorFace[]) {
+      const fd = buildDrawers({
+        ...drawerBase,
+        decor: {
+          ...decorBase,
+          faces: [face],
+          design: { grid: onGrid, gw: ON, gh: ON },
+          palette: [DEC_BLACK_PAL],
+          inlay: [true],
+        },
+      });
+      const fr = shellFaceFrame(
+        face,
+        drawerBase.cabinetWidthMm,
+        onShellD,
+        drawerBase.cabinetHeightMm,
+        fd.chamferMm
+      );
+      // the front contributes one piece per drawer panel, the rest one each
+      const pieces = fd.assembled.parts.filter((p) =>
+        face === "front"
+          ? /^Front( \d+)? decor/.test(p.name)
+          : p.name === `${DECOR_FACE_LABELS[face]} decor 1`
+      );
+      if (pieces.length === 0) {
+        faceEscape.push(`${face}: no part`);
+        continue;
+      }
+      let fu0 = Infinity, fu1 = -Infinity, fv0 = Infinity, fv1 = -Infinity;
+      for (const piece of pieces) {
+        for (let i = 0; i + 2 < piece.positions.length; i += 3) {
+          const dx = piece.positions[i] - fr.plane.O[0];
+          const dy = piece.positions[i + 1] - fr.plane.O[1];
+          const dz = piece.positions[i + 2] - fr.plane.O[2];
+          const u = dx * fr.plane.U[0] + dy * fr.plane.U[1] + dz * fr.plane.U[2];
+          const v = dx * fr.plane.V[0] + dy * fr.plane.V[1] + dz * fr.plane.V[2];
+          fu0 = Math.min(fu0, u);
+          fu1 = Math.max(fu1, u);
+          fv0 = Math.min(fv0, v);
+          fv1 = Math.max(fv1, v);
+        }
+      }
+      if (
+        !(fu1 < fr.w * 0.55 && fu0 > fr.w * 0.05) ||
+        !(fv0 > fr.h * 0.45 && fv1 < fr.h * 0.95)
+      ) {
+        faceEscape.push(`${face}: u ${fu0.toFixed(0)}–${fu1.toFixed(0)} v ${fv0.toFixed(0)}–${fv1.toFixed(0)}`);
+      }
+    }
+    check(
+      faceEscape.length === 0,
+      `the design reads upright and unmirrored on every face (${faceEscape.join("; ") || "ok"})`
+    );
+  }
+
+
+  const deep = buildDrawers({
+    ...drawerBase,
+    decor: { ...decorBase, recessMm: 40, faces: ["back"] },
+  });
+  check(
+    (deep.decor?.recessMm ?? 0) < 40 &&
+      deep.warnings.some((w) => /deeper than the material/i.test(w)),
+    "a recess deeper than the walls is clamped with a warning"
+  );
+
+}
 
 // ---- smooth shape contours (contour snapping) ----------------------------
 {

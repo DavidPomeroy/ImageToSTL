@@ -45,6 +45,8 @@ export function Slider(props: {
   step: number;
   unit: string;
   onChange: (v: number) => void;
+  /** Stacked, smaller layout so several fit across a narrow column. */
+  compact?: boolean;
 }) {
   // The readout doubles as a text field. While typing, a local draft keeps
   // partial input ("0." or a lone "-") alive; blur / Enter commits it — the
@@ -72,42 +74,87 @@ export function Slider(props: {
     if (next !== null) props.onChange(next);
   };
 
+  // The value field is the same element in both layouts; only its size differs.
+  const field = (className: string) => (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      spellCheck={false}
+      aria-label={`${props.label} value`}
+      title="Type a value, or drag the slider"
+      value={text}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onMouseUp={(e) => {
+        if (freshClick.current) {
+          e.currentTarget.select();
+          freshClick.current = false;
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur(); // blur commits
+        } else if (e.key === "Escape") {
+          cancelled.current = true;
+          setDraft(null);
+          e.currentTarget.blur();
+        }
+      }}
+      onBlur={(e) => {
+        freshClick.current = true;
+        commit(e.currentTarget.value);
+      }}
+      className={className}
+    />
+  );
+  const range = (
+    <input
+      type="range"
+      aria-label={props.label}
+      min={props.min}
+      max={props.max}
+      step={props.step}
+      value={props.value}
+      onChange={(e) => {
+        setDraft(null);
+        props.onChange(Number(e.target.value));
+      }}
+      className="w-full accent-emerald-500"
+    />
+  );
+
+  // Compact layout: label above, then a narrow value + unit row, then the slider.
+  // Three of these sit side by side without the label colliding with the value.
+  if (props.compact) {
+    return (
+      <label className="block">
+        <span className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">
+          {props.label}
+        </span>
+        <span className="flex items-baseline gap-1">
+          {field(
+            "min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-1 py-0.5 text-right text-sm tabular-nums text-zinc-300 transition-colors hover:border-zinc-700 focus:border-emerald-500/50 focus:outline-none"
+          )}
+          {props.unit !== "" && (
+            <span className="text-xs tabular-nums text-zinc-500">
+              {props.unit}
+            </span>
+          )}
+        </span>
+        <div className="mt-1">{range}</div>
+      </label>
+    );
+  }
+
   return (
     <label className="block">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <span className="text-sm text-zinc-300">{props.label}</span>
         <span className="flex items-baseline">
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            spellCheck={false}
-            aria-label={`${props.label} value`}
-            title="Type a value, or drag the slider"
-            value={text}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={(e) => e.currentTarget.select()}
-            onMouseUp={(e) => {
-              if (freshClick.current) {
-                e.currentTarget.select();
-                freshClick.current = false;
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.currentTarget.blur(); // blur commits
-              } else if (e.key === "Escape") {
-                cancelled.current = true;
-                setDraft(null);
-                e.currentTarget.blur();
-              }
-            }}
-            onBlur={(e) => {
-              freshClick.current = true;
-              commit(e.currentTarget.value);
-            }}
-            className="w-16 rounded border border-transparent bg-transparent px-1 py-0.5 text-right text-sm tabular-nums text-zinc-400 transition-colors hover:border-zinc-700 focus:border-emerald-500/50 focus:bg-zinc-950 focus:text-zinc-200 focus:outline-none"
-          />
+          {field(
+            "w-16 rounded border border-transparent bg-transparent px-1 py-0.5 text-right text-sm tabular-nums text-zinc-400 transition-colors hover:border-zinc-700 focus:border-emerald-500/50 focus:bg-zinc-950 focus:text-zinc-200 focus:outline-none"
+          )}
           {props.unit !== "" && (
             <span className="whitespace-pre text-sm tabular-nums text-zinc-400">
               {props.unit}
@@ -115,19 +162,7 @@ export function Slider(props: {
           )}
         </span>
       </div>
-      <input
-        type="range"
-        aria-label={props.label}
-        min={props.min}
-        max={props.max}
-        step={props.step}
-        value={props.value}
-        onChange={(e) => {
-          setDraft(null);
-          props.onChange(Number(e.target.value));
-        }}
-        className="w-full accent-emerald-500"
-      />
+      {range}
     </label>
   );
 }

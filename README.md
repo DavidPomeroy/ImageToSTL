@@ -27,7 +27,9 @@ A small Next.js web app with eight tools that all export slicer-ready, multi-par
   open-front cabinet divided into 1–8 compartments by side-rail shelves, plus
   matching **drawer fronts and trays** (separate parts joined by a sliding
   dovetail, with optional hex-pattern tray walls) printed beside it. Tune the
-  cabinet size, thicknesses and colours.
+  cabinet size, thicknesses and colours — and optionally **decorate the faces
+  with an image**, printed as separate inlay parts that glue into matching
+  recesses.
 - **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
   a map** into a solid **3D terrain tile** with a variable-height relief, an
   optional coloured base plate and optional elevation colour bands.
@@ -345,16 +347,20 @@ on); print the plate from the Image → 3D tool separately and seat it in the li
 
 ## Drawers → 3D (`/drawers`)
 
-A freestanding **chest of drawers** built from a few parameters — no image
-needed. The cabinet is an open-front box (floor + left/right/back walls + roof)
+A freestanding **chest of drawers** built from a few parameters — the cabinet is
+an open-front box (floor + left/right/back walls + roof)
 divided by (N − 1) shelves into **1–8 compartments**. Each drawer is **two
 printed parts**: a **front panel** and an open-top tray that is **open at the
 front too** (the panel closes it). The panel's back carries dovetail **grooves**
 that slide onto **tenons cut into the tray's exposed side wall ends**, so the
 front can take its own colour and the tray walls can be lightened (see below).
 The panels sit **in** the cube's front face, flush with the front plane — the
-cabinet's shell is held back by their thickness — and the outermost two carry
-the cube's **top/bottom chamfer**, so a closed chest is a plain chamfered cube.
+cabinet's shell is held back by their thickness — and carry the cube's chamfer
+there (the front side edges on every panel, the **top/bottom** ends on the
+outermost two, and the **front-to-back corner edges**), so a closed chest is a
+plain chamfered cube. Any of the six faces can also be **decorated from an
+uploaded image** — printed as separate inlay parts that glue into a matching
+recess (see *Decorating it with an image*).
 Fronts and trays are laid out beside the cabinet, and the
 page shows **two 3D previews**: that print layout, and the chest **assembled**
 (both previews share the one viewer — the assembled one feeds it the parts in the
@@ -387,14 +393,15 @@ support-free.
   dovetail tenons.
 - **Drawer front colour / drawer tray colour** — the fronts and trays print as
   separate parts, so each takes its own filament.
-- **Chamfer (cube edges)** — a straight **45° chamfer** on the cube's outer
-  edges. The cabinet's own front face is held back by the front panel's
-  thickness and stays **square**; the **drawer fronts** fill that front slab and
-  carry the chamfer there — the outer ends of the topmost and bottom panels
-  included — so a closed chest reads as one chamfered cube with nothing proud of
-  it. The chamfer is clamped to the thinnest of the wall / floor / roof / front
-  panel (a warning appears if it had to be reduced). 0&nbsp;mm gives the plain
-  square box. The chamfer overhangs at the bed, so print with a brim.
+- **Chamfer (cube edges)** — a straight **45° chamfer** on all twelve of the
+  cube's outer edges. The **drawer fronts** fill the cube's front slab and carry
+  the chamfer there: the front side edges on every panel, the **top/bottom** ends
+  on the topmost and bottom panels, and the **front-to-back corner edges** too —
+  so a closed chest reads as one clean chamfered cube with nothing proud of it
+  (the shell's own front face is the cube's chamfered cross-section, hidden behind
+  the flush fronts). The chamfer is clamped to the thinnest of the wall / floor /
+  roof / front panel (a warning appears if it had to be reduced). 0&nbsp;mm gives
+  the plain square box. The chamfer overhangs at the bed, so print with a brim.
 - **Drawer fit clearance** — the gap between a drawer and its opening, per
   enclosed side (0.2–0.4&nbsp;mm suits most FDM printers).
 - **Drawer vertical gap** — play around a drawer: it keeps the tray clear of its
@@ -402,20 +409,71 @@ support-free.
   between consecutive front panels (each panel stops half this short of the
   shelf's mid-line, so the fronts almost touch).
 
+### Decorating it with an image
+
+*Decoration (image inlay)* takes an uploaded image and turns it into an inlay:
+each colour you tick becomes a **separate printed part**, and every face you tick
+gets a **recess** cut into it for the parts to glue into.
+
+- **Faces to decorate** — Front / Back / Left / Right / Top / Bottom. The design
+  covers a face at one physical scale, centred, always a clear cell in from the
+  chamfer, and reads exactly as the uploaded image does: its top is the top of
+  each face seen from outside, its left the left, on every face. Transparent
+  pixels are face material (as the drop zone says).
+- **The front is split across the drawer fronts.** The design is laid over the
+  whole front and cut into one band per panel (a clear cell in from each panel's
+  own edges), so no inlay ever crosses a drawer seam or reaches past a panel —
+  the fronts can still open without catching. Front inlays are kept **flush** for
+  the same reason, whatever *Inlay proud* says.
+- **Recess base** — the recess is spanned by a **base plate** whose holes are
+  exactly the design's outline, so each colour drops into a pocket cut to its own
+  shape. Printed in the face's own colour it vanishes into the surface and the
+  set glues in flush; untick *print it* to leave the recess open, or *face
+  colour* to print the base in a second filament.
+- **Inlay colours** — detected from the image (2–8, *Design colours*), editable
+  swatches with the pixel count each covers. The commonest colour is treated as
+  the face; tick any colour to print it instead.
+- **Recess depth / Inlay proud of the face / Inlay fit clearance** — how deep the
+  picture sinks in, how far the parts stand proud (0 = flush), and the gap around
+  each part. The clearance can only be whole design cells, so it is rounded to
+  the nearest cell and 0 gives an exact, press-fit inlay.
+- **Design size / Design resolution** — how much of the face the design covers,
+  and the cell grid it is sampled at (48–256 px across its longer side). The
+  recess depth is clamped to the thinnest wall / floor / roof / front behind the
+  face it is cut into, and a warning says so if it had to be reduced.
+
+Each face contributes a part per inlaid colour plus its base plate (named
+`Back decor 1`, `Back base`, `Front 2 decor 1`, …) — the front's parts carry the
+drawer's name so the assembled preview's **Open drawers** animation moves them
+with their panel. Everything else (preview, 3MF with one extruder colour per
+part, STL/STL-zip export) is unchanged.
+
+**How it is built** — an image decoration is deliberately **all cell-based**.
+The recess is a rectangle (the design's bounding box) because earcut drops
+*collinear* vertices from hole rings, so a cap triangulated from a pixel outline
+could never weld to walls emitted per outline segment — every straight run would
+leave a T-junction. The base plate supplies the silhouette: its holes are the
+design's own cells, and each colour's part is the same cell prism, so parts,
+plate and recess all agree. The parts are built by a plain per-cell prism
+(`maskPrism` in `lib/decor.ts`) rather than `buildMaskExtrusion`, whose merged
+sheet faces leave the same T-junctions against its per-cell walls around a hole
+in a large plate — exactly the plate's shape.
+
 **How it is built** — a heightfield cannot slope an outer face (its side walls
 are always vertical) and can only staircase a corner, so the cabinet is built as
 **one explicit closed polyhedron**: the shell's 6 faces — bottom, top, left and
-right are hexagons (earcut-triangulated) that fan out to the full front square,
-while the bevel ramps in over the front collar — plus 8 edge-chamfer rectangles
-and 4 back corner triangles, with the front cavity cut as a rectangular pocket
-(the front face becomes a ring, triangulated with `earcut`), with each shelf's
+right are inset rectangles, and its front face is the cube's chamfered
+cross-section (a square with the four corners cut by the chamfer, triangulated
+with `earcut`) — plus 12 edge-chamfer rectangles and 8 corner triangles, with the
+front cavity cut as a rectangular pocket, with each shelf's
 two exact **side-rail** boxes (not a full slab) welded into the same mesh. The
 shell is then shifted back by the front panel's thickness, so the panels — not
 the cabinet — form the cube's front slab, and the whole cube is rotated so its
 back rests on the bed and the opening faces up. Each drawer is an explicit
-**front panel** (its front face inset by the chamfer on all four sides — the
-top/bottom cuts only on the outermost drawers, where they'd otherwise leave a
-square lip — with dovetail **grooves** in its back, sized to its compartment
+**front panel** (its front face inset by the chamfer on all four sides, its four
+front-to-back corner edges cut by the chamfer too — the top/bottom cuts only on
+the outermost drawers, where they'd otherwise leave a square lip — with dovetail
+**grooves** in its back, sized to its compartment
 **plus half of each dividing shelf** so the panels almost touch and the outermost
 ones reach the cube's bottom and top faces) and an explicit **open-top,
 open-front tray**: a floor plus three walls, each side wall's exposed front end
@@ -427,7 +485,16 @@ each) in the flat orientation.
 Import as one object
 with multiple parts: each part takes one extruder colour. (The mesh-level
 geometry tests check every part stays watertight for chamfers 0–3&nbsp;mm across
-1–6 drawers, and for both tray-wall styles.)
+1–6 drawers, and for both tray-wall styles, that a closed chest is a clean 45°
+chamfered cube, and that the flush fronts span the full cube width and carry the
+outer end chamfers. Decorated chests are checked too: every inlay part and base
+plate is watertight and wound outward, the recess floor really sits the full
+depth inside the face with the rest of the face flush, front inlays never reach
+past their own panel or proud of it across 1–6 drawers, inlays stay inside their
+own face's rectangle, and the design reads upright and unmirrored on **every**
+face (a marked corner of the image must land on that face's upper left as seen
+from outside). A blank image changes nothing, and a too-deep recess is clamped
+with a warning.)
 
 ## Terrain → 3D (`/terrain`) — experimental, may not work as expected
 
@@ -612,7 +679,12 @@ lib/box.ts         storage-box geometry: shaped container + separate plug/recess
 lib/hinge.ts       print-in-place pin/knuckle hinge solids (extruded profiles)
 lib/boxPrefill.ts  Image → 3D → Box → 3D settings hand-off (sessionStorage)
 lib/drawers.ts     drawer-cabinet geometry: open-front cabinet + shelf/roof slabs
-                   + separate drawer trays (printed beside)
+                   + separate drawer trays (printed beside), plus the face
+                   recesses for an image decoration
+lib/decor.ts       image decoration: a design grid → a recess rectangle per face
+                   + one inlay part per colour + the base plate (pure)
+lib/decorRaster.ts browser side of the decoration: draw the uploaded image,
+                   detect its colours, map pixels to a design grid
 lib/buildings.ts   OSM building footprints (Overpass) → extruded prisms
 scripts/           core-logic test + shape-outline tracer (trace-shape.ts)
 ```

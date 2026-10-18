@@ -5,9 +5,12 @@ import { useCallback, useRef, useState } from "react";
 export default function Dropzone({
   onFile,
   fileName,
+  note = "PNG · JPG · WebP — transparent areas become empty space",
 }: {
   onFile: (file: File) => void;
   fileName: string | null;
+  /** Optional hint line under the drop zone. */
+  note?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -76,7 +79,7 @@ export default function Dropzone({
             Drop an image here, or click to browse
           </span>
           <span className="mt-1 text-xs text-zinc-500">
-            PNG · JPG · WebP — transparent areas become empty space
+            {note}
           </span>
         </>
       )}

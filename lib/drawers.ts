@@ -1462,8 +1462,9 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
 
   // The front's decoration: the design covers the cube's whole front elevation
   // (inset by the chamfer and the panels' end cuts) and is then split per panel,
-  // so no part can straddle two drawers or reach past a panel's own edge. A
-  // front inlay is always flush — a raised one would catch on a shelf.
+  // so no part can straddle two drawers or reach past a panel's own edge. Front
+  // parts may be proud (a raised applique): they sit on the outer face, outside
+  // the cabinet, so they cannot catch on a shelf when the drawer opens.
   const frontCut = Math.min(c, Math.max(0, frontThk - dvDepth - 0.2));
   const frontRecess = Math.min(wantRecess, Math.max(0.4, frontThk - dvDepth - 0.6));
   const frontGrid =
@@ -1523,7 +1524,7 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
           plane,
           slice,
           frontRecess,
-          0,
+          wantProud,
           input.frontColor,
           (i) =>
             N > 1
@@ -1693,11 +1694,10 @@ export function buildDrawers(input: DrawersInput): DrawersResult {
           `(thicken the walls, or lower the recess).`
       );
     }
-    if (wantProud > 1e-6 && decor.faces.includes("front")) {
+    if (wantProud > 1e-6 && decor.faces.includes("bottom")) {
       warnings.push(
-        `Drawer-front inlays stay flush (the design's proud ${wantProud.toFixed(
-          1
-        )} mm is ignored there) so an open drawer cannot catch on a shelf.`
+        `A raised decoration on the bottom face will stop the chest sitting ` +
+          `flat — lower its proud height or leave the bottom undecorated.`
       );
     }
     if (decorThin) {

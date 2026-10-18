@@ -28,8 +28,8 @@ A small Next.js web app with eight tools that all export slicer-ready, multi-par
   matching **drawer fronts and trays** (separate parts joined by a sliding
   dovetail, with optional hex-pattern tray walls) printed beside it. Tune the
   cabinet size, thicknesses and colours — and optionally **decorate the faces
-  with an image**, printed as separate inlay parts that glue into matching
-  recesses.
+  with an image**, printed as separate parts that glue into matching recesses or
+  sit on the face as a raised applique.
 - **Terrain → 3D** (`/terrain`) **[experimental — may not work as expected]** — turns a heightmap image **or a place picked on
   a map** into a solid **3D terrain tile** with a variable-height relief, an
   optional coloured base plate and optional elevation colour bands.
@@ -359,8 +359,9 @@ cabinet's shell is held back by their thickness — and carry the cube's chamfer
 there (the front side edges on every panel, the **top/bottom** ends on the
 outermost two, and the **front-to-back corner edges**), so a closed chest is a
 plain chamfered cube. Any of the six faces can also be **decorated from an
-uploaded image** — printed as separate inlay parts that glue into a matching
-recess (see *Decorating it with an image*).
+uploaded image** — printed as separate parts that either glue into a matching
+recess or sit on the face as a raised applique (see *Decorating it with an
+image*).
 Fronts and trays are laid out beside the cabinet, and the
 page shows **two 3D previews**: that print layout, and the chest **assembled**
 (both previews share the one viewer — the assembled one feeds it the parts in the
@@ -397,10 +398,11 @@ support-free.
   cube's outer edges. The **drawer fronts** fill the cube's front slab and carry
   the chamfer there: the front side edges on every panel, the **top/bottom** ends
   on the topmost and bottom panels, and the **front-to-back corner edges** too —
-  so a closed chest reads as one clean chamfered cube with nothing proud of it
-  (the shell's own front face is the cube's chamfered cross-section, hidden behind
-  the flush fronts). The chamfer is clamped to the thinnest of the wall / floor /
-  roof / front panel (a warning appears if it had to be reduced). 0&nbsp;mm gives
+  so a closed chest reads as one clean chamfered cube (the decoration may sit
+  proud of a face, as in the reference question-mark block). The shell's own
+  front face is the cube's chamfered cross-section, hidden behind the flush
+  fronts. The chamfer is clamped to the thinnest of the wall / floor / roof /
+  front panel (a warning appears if it had to be reduced). 0&nbsp;mm gives
   the plain square box. The chamfer overhangs at the bed, so print with a brim.
 - **Drawer fit clearance** — the gap between a drawer and its opening, per
   enclosed side (0.2–0.4&nbsp;mm suits most FDM printers).
@@ -411,42 +413,65 @@ support-free.
 
 ### Decorating it with an image
 
-*Decoration (image inlay)* takes an uploaded image and turns it into an inlay:
-each colour you tick becomes a **separate printed part**, and every face you tick
-gets a **recess** cut into it for the parts to glue into.
+*Decoration (image inlay / applique)* takes an uploaded image and turns it into a
+printed decoration: each colour you tick becomes a **separate printed part**, and
+every face you tick either gets a **recess** cut into it for the parts to glue
+into, or — with a recess depth of 0 — carries the parts as a **raised applique**
+glued straight onto the face.
 
 - **Faces to decorate** — Front / Back / Left / Right / Top / Bottom. The design
   covers a face at one physical scale, centred, always a clear cell in from the
   chamfer, and reads exactly as the uploaded image does: its top is the top of
   each face seen from outside, its left the left, on every face. Transparent
-  pixels are face material (as the drop zone says).
+  pixels are face material.
+- **Fill enclosed outlines** — line art is normally a thin outline drawn on a
+  *transparent* background, so the enclosed areas (a question mark's body, a
+  rivet's disc) are the real design, not the stroke. This option fills every
+  transparent region enclosed by the drawing with the dominant ink colour while
+  leaving genuine holes (the counter of a question mark or letter O) open; a
+  one-cell gap in a hairline is bridged first. It is auto-enabled when a dropped
+  image looks like line art, and auto-disabled for photographs.
 - **The front is split across the drawer fronts.** The design is laid over the
   whole front and cut into one band per panel (a clear cell in from each panel's
-  own edges), so no inlay ever crosses a drawer seam or reaches past a panel —
-  the fronts can still open without catching. Front inlays are kept **flush** for
-  the same reason, whatever *Inlay proud* says.
-- **Recess base** — the recess is spanned by a **base plate** whose holes are
-  exactly the design's outline, so each colour drops into a pocket cut to its own
-  shape. Printed in the face's own colour it vanishes into the surface and the
-  set glues in flush; untick *print it* to leave the recess open, or *face
-  colour* to print the base in a second filament.
+  own edges), so no part ever crosses a drawer seam or reaches past a panel — the
+  fronts can still open independently. Front parts may be **proud**: they sit on
+  the outer face, outside the cabinet, so a raised applique cannot catch on a
+  shelf.
+- **Recess base** — when the recess depth is above zero, the recess is spanned by
+  a **base plate** whose holes are exactly the design's outline, so each colour
+  drops into a pocket cut to its own shape. Printed in the face's own colour it
+  vanishes into the surface and the set glues in flush; untick *print it* to
+  leave the recess open, or *face colour* to print the base in a second filament.
+  With a recess depth of 0 there is no recess or base plate at all.
 - **Inlay colours** — detected from the image (2–8, *Design colours*), editable
-  swatches with the pixel count each covers. The commonest colour is treated as
-  the face; tick any colour to print it instead.
+  swatches with the pixel count each covers. In a normal image the commonest
+  colour is treated as the face; for line art (where the face is transparent) the
+  ink is inlay. Swatches that cover no cells are hidden; tick any colour to print
+  it instead.
 - **Recess depth / Inlay proud of the face / Inlay fit clearance** — how deep the
   picture sinks in, how far the parts stand proud (0 = flush), and the gap around
-  each part. The clearance can only be whole design cells, so it is rounded to
-  the nearest cell and 0 gives an exact, press-fit inlay.
+  each part. The pair also sets the part thickness: recess + proud. For the
+  reference question-mark-block look use *recess 0* and *proud* 3.5–4 mm; the
+  parts then print as raised applique pieces. The clearance can only be whole
+  design cells, so it is rounded to the nearest cell and 0 gives an exact,
+  press-fit inlay.
 - **Design size / Design resolution** — how much of the face the design covers,
   and the cell grid it is sampled at (48–256 px across its longer side). The
   recess depth is clamped to the thinnest wall / floor / roof / front behind the
   face it is cut into, and a warning says so if it had to be reduced.
 
-Each face contributes a part per inlaid colour plus its base plate (named
-`Back decor 1`, `Back base`, `Front 2 decor 1`, …) — the front's parts carry the
-drawer's name so the assembled preview's **Open drawers** animation moves them
-with their panel. Everything else (preview, 3MF with one extruder colour per
-part, STL/STL-zip export) is unchanged.
+When a dropped image is detected as line art, the page switches to the
+reference look automatically: *Fill enclosed outlines* on, recess 0, proud
+3.5&nbsp;mm, design size 0.9 and the drawer fronts take the cabinet colour. The
+ink swatch is left as detected (black here) — click it to match your filament
+(white in the reference). Every value stays adjustable, and dropping a
+photograph restores the recessed-inlay defaults.
+
+Each face contributes a part per inlaid colour plus its base plate when there is
+a recess (named `Back decor 1`, `Back base`, `Front 2 decor 1`, …) — the front's
+parts carry the drawer's name so the assembled preview's **Open drawers**
+animation moves them with their panel. Everything else (preview, 3MF with one
+extruder colour per part, STL/STL-zip export) is unchanged.
 
 **How it is built** — an image decoration is deliberately **all cell-based**.
 The recess is a rectangle (the design's bounding box) because earcut drops
@@ -458,6 +483,16 @@ plate and recess all agree. The parts are built by a plain per-cell prism
 (`maskPrism` in `lib/decor.ts`) rather than `buildMaskExtrusion`, whose merged
 sheet faces leave the same T-junctions against its per-cell walls around a hole
 in a large plate — exactly the plate's shape.
+
+**How it is built** — the line-art fill is a pure grid operation
+(`fillEnclosedDesign` in `lib/decor.ts`). It bridges one-cell gaps in the ink,
+grows it by one cell (eight-neighbour, so diagonal breaks seal too), floods the
+background in from the grid border, and then classifies each enclosed
+transparent component by casting one ray to the border and counting the ink runs
+it crosses: odd means the region is inside the drawing (fill it), even means it
+is a hole (leave it). The filled grid is the same `DecorDesign` the inlay builder
+consumes, so the solid question mark and its rivet discs are ordinary cell prisms
+and every mesh rule above still applies.
 
 **How it is built** — a heightfield cannot slope an outer face (its side walls
 are always vertical) and can only staircase a corner, so the cabinet is built as
@@ -489,12 +524,13 @@ geometry tests check every part stays watertight for chamfers 0–3&nbsp;mm acro
 chamfered cube, and that the flush fronts span the full cube width and carry the
 outer end chamfers. Decorated chests are checked too: every inlay part and base
 plate is watertight and wound outward, the recess floor really sits the full
-depth inside the face with the rest of the face flush, front inlays never reach
-past their own panel or proud of it across 1–6 drawers, inlays stay inside their
-own face's rectangle, and the design reads upright and unmirrored on **every**
-face (a marked corner of the image must land on that face's upper left as seen
-from outside). A blank image changes nothing, and a too-deep recess is clamped
-with a warning.)
+depth inside the face with the rest of the face flush, front decor never reaches
+past its own panel and follows the requested proud height (including the
+recess-0 raised applique, which prints no base plate) across 1–6 drawers, inlays
+stay inside their own face's rectangle, and the design reads upright and
+unmirrored on **every** face (a marked corner of the image must land on that
+face's upper left as seen from outside). A blank image changes nothing, and a
+too-deep recess is clamped with a warning.)
 
 ## Terrain → 3D (`/terrain`) — experimental, may not work as expected
 

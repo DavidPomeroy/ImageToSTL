@@ -9,8 +9,16 @@ import DrawersControls, {
 import { LoadingOverlay, Spinner } from "@/components/Spinner";
 import { build3MF, buildSTL, buildSTLZip } from "@/lib/exporters";
 import { buildDrawers, type DrawersResult } from "@/lib/drawers";
-import type { DecorInput } from "@/lib/decor";
+import type { DecorDesign, DecorInput } from "@/lib/decor";
+import {
+  countDesignColours,
+  dominantDesignColour,
+  fillEnclosedDesign,
+  isLineArtDesign,
+  resampleGrid,
+} from "@/lib/decor";
 import { detectDesignPalette, designFromPixels, readDesignPixels } from "@/lib/decorRaster";
+import type { DesignPixels } from "@/lib/decorRaster";
 import type { RGB } from "@/lib/quantize";
 
 const PreviewGeneric = dynamic(() => import("@/components/PreviewGeneric"), {
@@ -62,6 +70,7 @@ const DEFAULT_CFG: DrawersControlValues = {
   decorRecessMm: 1.2,
   decorProudMm: 0,
   decorClearanceMm: 0,
+  decorFill: false,
   decorSizePct: 0.8,
   decorResolution: 128,
   decorColorCount: 4,
@@ -126,7 +135,13 @@ export default function DrawersPage() {
   const [decorImage, setDecorImage] = useState<HTMLImageElement | null>(null);
   const [decorName, setDecorName] = useState<string | null>(null);
   const [decorPalette, setDecorPalette] = useState<RGB[]>([]);
+  /** The palette the *design grid* was mapped with (never edited by a swatch). */
+  const [decorMapPalette, setDecorMapPalette] = useState<RGB[]>([]);
   const [decorCounts, setDecorCounts] = useState<number[]>([]);
+  const [decorLineArt, setDecorLineArt] = useState(false);
+  const [decorDetectNonce, setDecorDetectNonce] = useState(0);
+  /** The image whose layout defaults were last applied (one auto-set per drop). */
+  const decorAutoFor = useRef<DesignPixels | null>(null);
 
   const debCfg = useDebouncedValue(cfg, 160);
   const debDecorRes = useDebouncedValue(cfg.decorResolution, 160);
@@ -147,22 +162,49 @@ export default function DrawersPage() {
     setDecorImage(null);
     setDecorName(null);
     setDecorPalette([]);
+    setDecorMapPalette([]);
     setDecorCounts([]);
+    setDecorLineArt(false);
+    decorAutoFor.current = null;
   }, []);
 
   // colours are detected once per image (and colour count), so editing a swatch
-  // or nudging the design resolution does not throw the palette away
+  // or nudging the design resolution does not throw the palette away. The grid
+  // is at 192 cells so the line-art fill (which needs ~128 to close a hairline)
+  // and the pixel counts it shows match the filled geometry.
   const decorDetect = useMemo(
-    () => (decorImage ? readDesignPixels(decorImage, 96) : null),
+    () => (decorImage ? readDesignPixels(decorImage, 192) : null),
     [decorImage]
   );
   useEffect(() => {
-    if (!decorDetect) return;
-    const { palette, counts } = detectDesignPalette(decorDetect, cfg.decorColorCount);
+    if (!decorDetect) {
+      setDecorLineArt(false);
+      return;
+    }
+    const { palette, counts: rawCounts } = detectDesignPalette(
+      decorDetect,
+      cfg.decorColorCount
+    );
+    if (palette.length === 0) {
+      setDecorPalette([]);
+      setDecorMapPalette([]);
+      setDecorCounts([]);
+      setDecorLineArt(false);
+      return;
+    }
+    const raw = designFromPixels(decorDetect, palette);
+    const dominant = dominantDesignColour(raw);
+    const fillable = fillEnclosedDesign(raw, dominant);
+    // A sparse ink on a transparent background with enclosed regions is line
+    // art: the enclosed areas are the design. Solid photos stay a normal inlay.
+    const lineArt = isLineArtDesign(raw) && fillable.filledComponents > 0;
+    const counts = lineArt
+      ? countDesignColours(fillable.design, palette.length)
+      : rawCounts;
     setDecorPalette(palette);
+    setDecorMapPalette(palette);
     setDecorCounts(counts);
-    // the commonest colour is the face itself, the rest inlay — the user can
-    // flip any of them
+    setDecorLineArt(lineArt);
     let commonest = -1;
     let best = -1;
     counts.forEach((n, i) => {
@@ -171,16 +213,66 @@ export default function DrawersPage() {
         commonest = i;
       }
     });
-    setCfg((c) => ({ ...c, decorInlay: palette.map((_, i) => i !== commonest) }));
-  }, [decorDetect, cfg.decorColorCount]);
+    // In a line drawing the face is the (transparent) background, so the ink is
+    // the inlay. In a normal image the commonest colour is the face.
+    const inlay = palette.map((_, i) =>
+      lineArt
+        ? (counts[i] ?? 0) > 0
+        : (counts[i] ?? 0) > 0 && i !== commonest
+    );
+    // Layout defaults follow the image once, on a new upload: line art becomes a
+    // raised applique, other images stay a recessed inlay. Changing the colour
+    // count or re-detecting must not throw the user's tweaks away.
+    const fresh = decorAutoFor.current !== decorDetect;
+    decorAutoFor.current = decorDetect;
+    setCfg((c) => {
+      if (!fresh) return { ...c, decorInlay: inlay };
+      return {
+        ...c,
+        decorInlay: inlay,
+        decorFill: lineArt,
+        ...(lineArt
+          ? {
+              decorRecessMm: 0,
+              decorProudMm: 3.5,
+              decorSizePct: 0.9,
+              decorResolution: Math.max(c.decorResolution, 192),
+              decorBackgroundInlay: false,
+              // the fronts are the decorated face, so they take the cabinet's
+              // colour (the reference's yellow chest has yellow fronts)
+              frontColor: c.color,
+            }
+          : {
+              decorRecessMm: 1.2,
+              decorProudMm: 0,
+              decorSizePct: 0.8,
+              decorBackgroundInlay: true,
+            }),
+      };
+    });
+  }, [decorDetect, cfg.decorColorCount, decorDetectNonce]);
 
-  const decorDesign = useMemo(
-    () =>
-      decorImage && decorPalette.length > 0
-        ? designFromPixels(readDesignPixels(decorImage, debDecorRes), decorPalette)
-        : null,
-    [decorImage, debDecorRes, decorPalette]
-  );
+  const decorDesign = useMemo((): DecorDesign | null => {
+    if (!decorImage || decorMapPalette.length === 0) return null;
+    // Filling needs the outline closed: at the default 128-cell grid a hairline
+    // is ~1.5 cells wide, while at 96 it can have gaps. If the user asked for a
+    // coarser print grid, the *filled* design is resampled back down.
+    const rasterRes = cfg.decorFill ? Math.max(debDecorRes, 128) : debDecorRes;
+    const raw = designFromPixels(readDesignPixels(decorImage, rasterRes), decorMapPalette);
+    if (!cfg.decorFill) return raw;
+    let design = fillEnclosedDesign(raw, dominantDesignColour(raw)).design;
+    const longest = Math.max(design.gw, design.gh);
+    // Only downsample when the fill had to be computed above the requested grid
+    // (it needs ~128 cells to close a hairline); the one-cell rounding of the
+    // normal read is not worth resampling.
+    if (longest > 0 && debDecorRes + 1 < longest) {
+      const s = debDecorRes / longest;
+      const tw = Math.max(1, Math.round(design.gw * s));
+      const th = Math.max(1, Math.round(design.gh * s));
+      design = { grid: resampleGrid(design, tw, th), gw: tw, gh: th };
+    }
+    return design;
+  }, [decorImage, debDecorRes, decorMapPalette, cfg.decorFill]);
 
   const decor = useMemo((): DecorInput | undefined => {
     if (!decorDesign || cfg.decorFaces.length === 0) return undefined;
@@ -366,6 +458,7 @@ export default function DrawersPage() {
                   onRemove: removeDecor,
                   palette: decorPalette,
                   counts: decorCounts,
+                  lineArt: decorLineArt,
                   onPalette: (i, color) =>
                     setDecorPalette((p) => {
                       const next = [...p];
@@ -378,15 +471,7 @@ export default function DrawersPage() {
                       next[i] = on;
                       return { ...c, decorInlay: next };
                     }),
-                  onAutoPalette: () => {
-                    if (!decorDetect) return;
-                    const { palette, counts } = detectDesignPalette(
-                      decorDetect,
-                      cfg.decorColorCount
-                    );
-                    setDecorPalette(palette);
-                    setDecorCounts(counts);
-                  },
+                  onAutoPalette: () => setDecorDetectNonce((n) => n + 1),
                 }}
               />
             </section>

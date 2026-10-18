@@ -431,6 +431,251 @@ export function erodeCells(
   return out;
 }
 
+/** How many cells carry each palette index (EMPTY is ignored). */
+export function countDesignColours(design: DecorDesign, count: number): number[] {
+  const out = new Array<number>(Math.max(0, count)).fill(0);
+  for (let i = 0; i < design.grid.length; i++) {
+    const v = design.grid[i];
+    if (v !== EMPTY && v < out.length) out[v]++;
+  }
+  return out;
+}
+
+/** The palette index covering the most cells (EMPTY ignored), or EMPTY. */
+export function dominantDesignColour(design: DecorDesign): number {
+  const counts = new Map<number, number>();
+  for (let i = 0; i < design.grid.length; i++) {
+    const v = design.grid[i];
+    if (v === EMPTY) continue;
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  let best = EMPTY;
+  let bestCount = 0;
+  for (const [index, n] of counts) {
+    if (n > bestCount) {
+      best = index;
+      bestCount = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Is the image line art? A drawing on a transparent background: most cells are
+ * empty and the ink is sparse. Such an image is normally a *stencil* — the
+ * enclosed areas are the design (a question mark's body, a rivet's disc), while
+ * the outlined strokes are only its border. `fillEnclosedDesign` turns it into
+ * that solid design.
+ */
+export function isLineArtDesign(design: DecorDesign): boolean {
+  const total = design.grid.length;
+  if (total === 0) return false;
+  let empty = 0;
+  for (let i = 0; i < total; i++) if (design.grid[i] === EMPTY) empty++;
+  const ink = total - empty;
+  return empty / total > 0.5 && ink / total < 0.3;
+}
+
+export interface FillResult {
+  /** The design with the enclosed regions filled. */
+  design: DecorDesign;
+  /** How many previously empty cells were filled. */
+  addedCells: number;
+  /** Enclosed transparent components the fill found. */
+  enclosedComponents: number;
+  /** Components classified as shape interior (odd crossings from the border). */
+  filledComponents: number;
+}
+
+/** Fill one-cell gaps in a thin line: a cell with ink on both opposite sides. */
+function bridgeOneCellGaps(
+  mask: Uint8Array,
+  gw: number,
+  gh: number
+): Uint8Array {
+  const out = Uint8Array.from(mask);
+  for (let y = 0; y < gh; y++) {
+    for (let x = 0; x < gw; x++) {
+      const i = y * gw + x;
+      if (mask[i]) continue;
+      const lr = x > 0 && mask[i - 1] === 1 && x + 1 < gw && mask[i + 1] === 1;
+      const ud = y > 0 && mask[i - gw] === 1 && y + 1 < gh && mask[i + gw] === 1;
+      if (lr || ud) out[i] = 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Grow a mask by `k` cells using all eight neighbours. The fill only uses this
+ * for classification: a thin antialiased (or hard-thresholded) line can break
+ * diagonally, which a four-neighbour dilation leaves open.
+ */
+function growMask8(
+  mask: Uint8Array,
+  gw: number,
+  gh: number,
+  k: number
+): Uint8Array {
+  let cur = mask;
+  for (let s = 0; s < Math.max(0, Math.round(k)); s++) {
+    const out = Uint8Array.from(cur);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const i = y * gw + x;
+        if (cur[i]) continue;
+        let hit = false;
+        for (let dy = -1; dy <= 1 && !hit; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= gh) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= gw) continue;
+            if (cur[yy * gw + xx]) {
+              hit = true;
+              break;
+            }
+          }
+        }
+        if (hit) out[i] = 1;
+      }
+    }
+    cur = out;
+  }
+  return cur;
+}
+
+/**
+ * Turn a line drawing into its solid stencil: every transparent region enclosed
+ * by ink is filled with `colourIndex`, except the *holes* (a question mark's
+ * counter, the inside of a letter O). The distinction is the even-odd rule: cast
+ * one ray from a cell of each enclosed region to the border and count the ink
+ * runs it crosses — odd means the region is inside the drawn shape, even means
+ * it is a hole in it.
+ *
+ * The ink mask is first bridged (one-cell gaps in a stroke) and grown by one
+ * cell because a thin antialiased outline can have gaps at print resolution;
+ * without that, a flood fill leaks out and the shape is not seen as enclosed.
+ *
+ * Everything downstream stays cell-based (see the module header): the filled
+ * grid is the same `DecorDesign` the inlay builder already consumes.
+ */
+export function fillEnclosedDesign(
+  design: DecorDesign,
+  colourIndex: number,
+  closeCells = 1
+): FillResult {
+  const { gw, gh } = design;
+  const n = gw * gh;
+  const ink = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (design.grid[i] !== EMPTY) ink[i] = 1;
+  const k = Math.max(0, Math.round(closeCells));
+  const bridged =
+    k > 0 ? bridgeOneCellGaps(ink, gw, gh) : Uint8Array.from(ink);
+  // Grow the ink by one cell (all eight neighbours) for the enclosure test. A
+  // hairline can have gaps at print resolution, including diagonal ones; growing
+  // it by a cell seals them, while using the grown mask for the fill keeps the
+  // silhouette continuous (the parts are a tenth of a millimetre bolder, which
+  // is invisible in print).
+  const closed =
+    k > 0 ? growMask8(bridged, gw, gh, k) : Uint8Array.from(ink);
+
+  // Flood the background in from the grid border. What the flood cannot reach
+  // is enclosed by the drawing.
+  const outside = new Uint8Array(n);
+  const stack: number[] = [];
+  const seed = (i: number) => {
+    if (closed[i] === 0 && outside[i] === 0) {
+      outside[i] = 1;
+      stack.push(i);
+    }
+  };
+  for (let x = 0; x < gw; x++) {
+    seed(x);
+    seed((gh - 1) * gw + x);
+  }
+  for (let y = 0; y < gh; y++) {
+    seed(y * gw);
+    seed(y * gw + gw - 1);
+  }
+  while (stack.length > 0) {
+    const j = stack.pop() as number;
+    const x = j % gw;
+    const y = (j / gw) | 0;
+    if (x > 0) seed(j - 1);
+    if (x + 1 < gw) seed(j + 1);
+    if (y > 0) seed(j - gw);
+    if (y + 1 < gh) seed(j + gw);
+  }
+
+  // The filled mask starts as the (closed) ink — including the cells that
+  // bridged a one-cell gap — and each enclosed region classified as interior.
+  const filled = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (closed[i]) filled[i] = 1;
+
+  const seen = new Uint8Array(n);
+  let enclosedComponents = 0;
+  let filledComponents = 0;
+  const comp: number[] = [];
+  const queue: number[] = [];
+  for (let start = 0; start < n; start++) {
+    if (closed[start] || outside[start] || seen[start]) continue;
+    enclosedComponents++;
+    comp.length = 0;
+    queue.length = 0;
+    queue.push(start);
+    seen[start] = 1;
+    while (queue.length > 0) {
+      const j = queue.pop() as number;
+      comp.push(j);
+      const x = j % gw;
+      const y = (j / gw) | 0;
+      const visit = (q: number) => {
+        if (closed[q] === 0 && outside[q] === 0 && seen[q] === 0) {
+          seen[q] = 1;
+          queue.push(q);
+        }
+      };
+      if (x > 0) visit(j - 1);
+      if (x + 1 < gw) visit(j + 1);
+      if (y > 0) visit(j - gw);
+      if (y + 1 < gh) visit(j + gw);
+    }
+    // Odd/even crossing count from the region's first cell to the left border.
+    const first = comp[0];
+    const row = (first / gw) | 0;
+    const x0 = first % gw;
+    let runs = 0;
+    let prev = 0;
+    for (let x = 0; x < x0; x++) {
+      const v = closed[row * gw + x];
+      if (v !== 0 && prev === 0) runs++;
+      prev = v;
+    }
+    if (runs % 2 === 1) {
+      filledComponents++;
+      for (const j of comp) filled[j] = 1;
+    }
+  }
+
+  const grid = new Uint8Array(design.grid);
+  let addedCells = 0;
+  if (colourIndex !== EMPTY) {
+    for (let i = 0; i < n; i++) {
+      if (filled[i] && grid[i] === EMPTY) {
+        grid[i] = colourIndex;
+        addedCells++;
+      }
+    }
+  }
+  return {
+    design: { grid, gw, gh },
+    addedCells,
+    enclosedComponents,
+    filledComponents,
+  };
+}
+
 /**
  * Fine-grid factor for the decoration parts: a mask can only be eroded by whole
  * cells, so they are built on a grid fine enough for the glue clearance to be
@@ -625,7 +870,10 @@ export function faceDecor(
     }
   }
   if (pieces.length === 0) return null;
-  if (opts.background) {
+  // A base plate only makes sense when there is a recess for it to span. With
+  // `recessMm = 0` the parts are a raised applique glued straight onto the face;
+  // a plate would become a rectangular decal around the design instead.
+  if (opts.background && depthMm > 1e-6) {
     // The plate fills the recess box around the design; its holes are the
     // design's own cells, so each colour drops into a pocket cut to its outline.
     const plate = new Uint8Array(up.grid.length);

@@ -29,6 +29,8 @@ export interface DrawersControlValues {
   decorRecessMm: number;
   decorProudMm: number;
   decorClearanceMm: number;
+  /** Fill transparent regions enclosed by the drawing (line art → solid shape). */
+  decorFill: boolean;
   decorSizePct: number;
   decorResolution: number;
   decorColorCount: number;
@@ -54,6 +56,8 @@ export interface DrawersDecorUi {
   /** Detected colours, with the pixel count each covers. */
   palette: RGB[];
   counts: number[];
+  /** True when the image was read as line art (filled, raised applique). */
+  lineArt: boolean;
   onPalette: (index: number, color: RGB) => void;
   onInlay: (index: number, on: boolean) => void;
   onAutoPalette: () => void;
@@ -78,6 +82,20 @@ export default function DrawersControls({
         : [...v.decorFaces, f],
     });
   const bgColor = v.decorBackground === "face" ? v.color : v.decorBackground;
+  // The palette is padded to the requested colour count; entries that cover no
+  // cells are not useful (they would show as 0 px swatches). Keep them only if
+  // the image is blank and nothing else would be listed.
+  const counted = decor.palette
+    .map((color, index) => ({ color, index, n: decor.counts[index] ?? 0 }))
+    .filter((row) => row.n > 0);
+  const paletteRows =
+    counted.length > 0
+      ? counted
+      : decor.palette.map((color, index) => ({
+          color,
+          index,
+          n: decor.counts[index] ?? 0,
+        }));
   return (
     <div className="space-y-4">
       {/* Cube size: three compact sliders share one row (the panel is only
@@ -301,7 +319,7 @@ export default function DrawersControls({
       <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-zinc-300">
-            Decoration (image inlay)
+            Decoration (image inlay / applique)
           </span>
           {decor.fileName && (
             <button
@@ -313,9 +331,38 @@ export default function DrawersControls({
             </button>
           )}
         </div>
-        <Dropzone onFile={decor.onFile} fileName={decor.fileName} />
+        <Dropzone
+          onFile={decor.onFile}
+          fileName={decor.fileName}
+          note="PNG · JPG · WebP — line art can be filled; other transparent areas stay empty"
+        />
         {decor.palette.length > 0 && (
           <>
+            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2">
+              <label className="flex items-start gap-2 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={v.decorFill}
+                  onChange={(e) => patch({ decorFill: e.target.checked })}
+                  className="mt-0.5 accent-emerald-500"
+                />
+                <span>
+                  Fill enclosed outlines
+                  {decor.lineArt && (
+                    <span className="ml-1 text-xs font-normal text-emerald-400">
+                      · line art detected
+                    </span>
+                  )}
+                </span>
+              </label>
+              <p className="mt-1 pl-6 text-xs leading-relaxed text-zinc-500">
+                Line art is drawn as an outline on a transparent background, so
+                the enclosed areas are the real design. This fills them into
+                solid shapes (a question mark&apos;s body and each rivet disc)
+                while leaving its counters and holes open. Turn it off to cut the
+                drawn strokes themselves.
+              </p>
+            </div>
             <div className="mt-3">
               <span className="mb-1 block text-sm text-zinc-300">
                 Faces to decorate
@@ -339,9 +386,9 @@ export default function DrawersControls({
               </div>
               <p className="mt-1 text-xs leading-relaxed text-zinc-500">
                 The front&apos;s design spans the whole front and is split across
-                the drawer fronts (a clear seam each side), so no inlay crosses a
-                drawer or lifts off it. The other five faces are recessed on the
-                cabinet itself.
+                the drawer fronts (a clear seam each side), so no part crosses a
+                drawer or lifts off it. The other five faces sit on the cabinet
+                itself.
               </p>
             </div>
             <div className="mt-3 space-y-3">
@@ -358,11 +405,17 @@ export default function DrawersControls({
                 label="Inlay proud of the face"
                 value={v.decorProudMm}
                 min={0}
-                max={2}
-                step={0.1}
+                max={8}
+                step={0.5}
                 unit=" mm"
                 onChange={(decorProudMm) => patch({ decorProudMm })}
               />
+              <p className="-mt-1 text-xs leading-relaxed text-zinc-500">
+                Recess 0 with a proud height prints a raised applique glued
+                straight onto the face (the look of the reference question-mark
+                block); no base plate is printed. A recessed inlay uses the recess
+                depth plus the proud height as its part thickness.
+              </p>
               <Slider
                 label="Inlay fit clearance"
                 value={v.decorClearanceMm}
@@ -414,7 +467,7 @@ export default function DrawersControls({
                 </button>
               </div>
               <ul className="space-y-2">
-                {decor.palette.map((c, i) => (
+                {paletteRows.map(({ color: c, index: i, n }) => (
                   <li
                     key={i}
                     className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2 py-1.5"
@@ -437,7 +490,7 @@ export default function DrawersControls({
                       />
                     </label>
                     <span className="min-w-0 flex-1 text-xs tabular-nums text-zinc-500">
-                      {(decor.counts[i] ?? 0).toLocaleString()} px
+                      {n.toLocaleString()} px
                     </span>
                     <label className="flex shrink-0 items-center gap-1 text-xs text-zinc-400">
                       <input
@@ -452,6 +505,7 @@ export default function DrawersControls({
                 ))}
               </ul>
             </div>
+            {v.decorRecessMm > 0 ? (
             <div className="mt-3 space-y-2">
               <div className="flex items-center gap-2">
                 <label
@@ -507,6 +561,12 @@ export default function DrawersControls({
                 filament.
               </p>
             </div>
+            ) : (
+              <p className="mt-3 text-xs leading-relaxed text-zinc-500">
+                Recess depth is 0: the parts print as a raised applique glued
+                straight onto the face, so there is no recess and no base plate.
+              </p>
+            )}
           </>
         )}
       </div>

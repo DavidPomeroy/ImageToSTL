@@ -61,7 +61,11 @@ import { buildBox, BOX_SHAPES } from "../lib/box";
 import { buildDrawers, shellFaceFrame } from "../lib/drawers";
 import {
   colourMasks,
+  countDesignColours,
   DECOR_FACE_LABELS,
+  dominantDesignColour,
+  fillEnclosedDesign,
+  isLineArtDesign,
   layoutFace,
   planePoint,
   unionMask,
@@ -3516,6 +3520,63 @@ async function main() {
   );
 
 
+// ---- line art fill: enclosed areas become solid, counters stay open --------
+{
+  const FW = 30;
+  const FH = 30;
+  const grid = new Uint8Array(FW * FH).fill(EMPTY);
+  const set = (x: number, y: number) => {
+    grid[y * FW + x] = 0;
+  };
+  // a 1-cell outline with a 1-cell gap at the top of the outer ring
+  for (let x = 4; x <= 25; x++) {
+    set(x, 4);
+    set(x, 25);
+  }
+  for (let y = 4; y <= 25; y++) {
+    set(4, y);
+    set(25, y);
+  }
+  grid[4 * FW + 14] = EMPTY;
+  // the counter's ring (a letter-O hole)
+  for (let x = 11; x <= 18; x++) {
+    set(x, 11);
+    set(x, 18);
+  }
+  for (let y = 11; y <= 18; y++) {
+    set(11, y);
+    set(18, y);
+  }
+  const art = { grid, gw: FW, gh: FH };
+  check(isLineArtDesign(art), "a sparse outline on empty cells reads as line art");
+  check(dominantDesignColour(art) === 0, "the dominant line-art colour is found");
+  const filled = fillEnclosedDesign(art, 0, 1);
+  const at = (x: number, y: number) => filled.design.grid[y * FW + x];
+  check(
+    filled.enclosedComponents === 2 && filled.filledComponents === 1,
+    `the body is filled and the counter is not (${filled.filledComponents}/${filled.enclosedComponents})`
+  );
+  check(at(6, 15) === 0, "the enclosed body becomes solid");
+  check(at(15, 15) === EMPTY, "the counter of the outline stays open");
+  check(at(1, 1) === EMPTY, "the outside of the outline stays empty");
+  check(
+    at(14, 4) === 0,
+    "a one-cell gap in the outline is closed before filling"
+  );
+  check(
+    filled.addedCells > 0 && countDesignColours(filled.design, 1)[0] > 0,
+    `the fill adds cells to the ink colour (${filled.addedCells})`
+  );
+  const blankFill = fillEnclosedDesign(
+    { grid: new Uint8Array(16).fill(EMPTY), gw: 4, gh: 4 },
+    0
+  );
+  check(
+    blankFill.addedCells === 0 && blankFill.enclosedComponents === 0,
+    "an empty design is left untouched by the fill"
+  );
+}
+
 // ---- drawer decoration: an image inlaid into the faces ----
 {
   const DW = 48;
@@ -3659,9 +3720,12 @@ async function main() {
   check(Math.abs(deckOffHit - 10) < 1e-6, "the rest of the back face stays flush with the cube");
 
   // the front's decoration is split per drawer: every piece lies inside its own
-  // panel's front face, and never proud of it
+  // panel's front face, and is raised by the requested proud height (front
+  // parts sit on the outer face, so a raised applique cannot catch on a shelf)
   let frontEscape = 0;
-  let frontProud = 0;
+  let frontDepthBad = 0;
+  let frontMin = Infinity;
+  let frontMax = -Infinity;
   for (let n = 1; n <= 6; n++) {
     const d = buildDrawers({
       ...drawerBase,
@@ -3686,7 +3750,9 @@ async function main() {
         if (x < px0 - 1e-6 || x > px1 + 1e-6 || z < pz0 - 1e-6 || z > pz1 + 1e-6) {
           frontEscape++;
         }
-        if (y < -1e-6 || y > 1.2) frontProud++;
+        if (y > drawerBase.frontMm + 1e-6) frontDepthBad++;
+        frontMin = Math.min(frontMin, y);
+        frontMax = Math.max(frontMax, y);
       }
     }
   }
@@ -3695,9 +3761,52 @@ async function main() {
     `front inlays never reach past their own drawer panel (1–6 drawers, ${frontEscape})`
   );
   check(
-    frontProud === 0,
-    `front inlays stay inside the front slab, so nothing catches (${frontProud})`
+    frontDepthBad === 0 && Math.abs(frontMin + decorBase.proudMm) < 1e-6,
+    `front inlays sit proud of the front face (y ${frontMin.toFixed(
+      2
+    )}..${frontMax.toFixed(2)} for ${decorBase.proudMm} mm proud)`
   );
+
+  // a raised applique: recess 0 prints the parts straight onto the face, with no
+  // base plate (it would be a rectangular decal) and no pocket in the panel
+  {
+    const raised = buildDrawers({
+      ...drawerBase,
+      decor: {
+        ...decorBase,
+        faces: ["front"],
+        recessMm: 0,
+        proudMm: 3.5,
+        backgroundInlay: true,
+      },
+    });
+    check(
+      raised.decor?.recessMm === 0,
+      "a raised applique cuts no recess into the face"
+    );
+    check(
+      !raised.parts.some((p) => /^Front( \d+)? base$/.test(p.name)) &&
+        !raised.parts.some((p) => p.name === "Back base"),
+      "a raised applique prints no base plate"
+    );
+    let proudBad = 0;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of raised.assembled.parts.filter((q) => /^Front( \d+)? decor/.test(q.name))) {
+      for (let i = 0; i + 2 < p.positions.length; i += 3) {
+        minY = Math.min(minY, p.positions[i + 1]);
+        maxY = Math.max(maxY, p.positions[i + 1]);
+      }
+      const e = analyzeEdges(p.positions);
+      proudBad += e.holes + e.bad;
+    }
+    check(
+      proudBad === 0 && Math.abs(minY + 3.5) < 1e-6 && maxY < -0.049 && maxY > -0.051,
+      `raised front parts are 3.5 mm proud and watertight (y ${minY.toFixed(
+        2
+      )}..${maxY.toFixed(2)})`
+    );
+  }
 
   // chamfers 0–3 mm keep every decorated part clean
   let decorSweep = 0;

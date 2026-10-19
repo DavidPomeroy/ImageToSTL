@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image → 4-Color 3D Print</title>
+  </head>
+  <body>
+    <p>Redirecting to the app…</p>
+    <script>
+      // GitHub Pages serves 404.html for any unknown path. Since this app uses
+      // client-side routing, redirect to the app root so the Next.js router can
+      // render the correct page. The loop guard prevents redirecting when we're
+      // already on the root.
+      (function () {
+        var base = "/ImageToSTL";
+        var path = window.location.pathname;
+        if (path === base || path === base + "/") {
+          return;
+        }
+        window.location.replace(base + "/");
+      })();
+    </script>
+  </body>
+</html>

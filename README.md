@@ -1,5 +1,7 @@
 # Image → Multi-Color 3D Print
 
+**Live site:** https://davidpomeroy.github.io/ImageToSTL/
+
 A small Next.js web app with eight tools that all export slicer-ready, multi-part 3MF / STL:
 
 - **Image → 3D** (`/`) — turns any uploaded image into a **3D-printable plate**
